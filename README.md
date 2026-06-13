@@ -1,23 +1,28 @@
-# vite-plus-starter
+# Sideffect
 
-A starter for creating a Vite Plus project.
+Effect style typed workflow and step helpers for Cloudflare Workflows.
+
+API unstable.
+
+## Scope
+
+- No custom runtime.
+- No wrapped `fetch` handler.
+- Typed workflows and steps.
+- Generated workflow wiring.
+- 1:1 Cloudflare Workflows API Coverage
+- Effect V4 is optional.
+
+## Imports
+
+```ts
+import { Workflow, Step, Rollback } from "sideffect";
+import { withCloudflareWorkflows } from "sideffect/vite";
+```
 
 ## Development
 
-- Install dependencies:
-
-```bash
-vp install
-```
-
-- Run the unit tests:
-
-```bash
-vp test
-```
-
-- Build the library:
-
-```bash
-vp pack
+```sh
+bun run check
+bun run test
 ```
