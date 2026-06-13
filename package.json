@@ -32,11 +32,22 @@
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "4.20260605.1",
     "@types/node": "25.6.2",
     "@typescript/native-preview": "7.0.0-dev.20260509.2",
     "bumpp": "11.1.0",
+    "effect": "4.0.0-beta.78",
     "typescript": "6.0.3",
     "vite-plus": "0.1.20"
+  },
+  "peerDependencies": {
+    "@cloudflare/workers-types": ">=4.20260605.1",
+    "effect": ">=4.0.0-beta.75"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/workers-types": {
+      "optional": true
+    }
   },
   "overrides": {
     "vite": "npm:@voidzero-dev/vite-plus-core@latest",
