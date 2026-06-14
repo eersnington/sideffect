@@ -1,4 +1,6 @@
 node_modules
 dist
+workbench/**/.wrangler
+workbench/**/dist
 *.log
 .DS_Store

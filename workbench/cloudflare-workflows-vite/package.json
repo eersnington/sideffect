@@ -1,0 +1,24 @@
+{
+  "name": "cloudflare-workflows-vite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "start": "vite dev",
+    "dev": "vite dev",
+    "build": "vite build",
+    "cf-typegen": "wrangler types"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.78",
+    "sideffect": "file:../.."
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.40.0",
+    "@cloudflare/workers-types": "4.20260605.1",
+    "typescript": "^5.0.4",
+    "vite": "^7.0.0",
+    "wrangler": "^4.6.0"
+  }
+}
