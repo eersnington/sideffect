@@ -23,37 +23,39 @@ import { withCloudflareWorkflows } from "sideffect/vite";
 
 ## Cloudflare Workflows
 
-Wrangler stays the workflow registry. Sideffect only creates the native
-`WorkflowEntrypoint` class exports that Cloudflare expects.
+Define workflows once with `Workflow.make(...).toLayer(...)`. In Vite projects,
+Sideffect discovers workflow files and generates the Cloudflare wiring.
 
 ```ts
-import { WorkflowEntrypoints } from "sideffect/cloudflare";
-import { resizeImageWorkflowLayer } from "./workflows/resize-image";
+// src/workflows/resize-image.ts
+import { Schema, Workflow } from "sideffect";
 
-export const { ResizeImage } = WorkflowEntrypoints.make({
-  ResizeImage: resizeImageWorkflowLayer,
+const resizeImage = Workflow.make({
+  name: "resize-image",
+  payload: Schema.Struct({ imageId: Schema.String }),
 });
 
-export default {
-  async fetch() {
-    return new Response("ok");
-  },
-};
+export const resizeImageLayer = resizeImage.toLayer(async (workflow) => {
+  return { imageId: workflow.payload.imageId };
+});
 ```
 
-```toml
-main = "./src/index.ts"
+Sideffect derives:
 
-[[workflows]]
-binding = "RESIZE_IMAGE"
-name = "resize-image"
-class_name = "ResizeImage"
+```json
+{
+  "binding": "RESIZE_IMAGE",
+  "name": "resize-image",
+  "class_name": "ResizeImage"
+}
 ```
+
+No `as ResizeImage` export alias is required.
 
 ## Vite Adapter
 
-If a project already uses Cloudflare's Vite plugin, Sideffect can generate the
-entrypoint exports from layer exports named after `class_name`.
+If a project already uses Cloudflare's Vite plugin, Sideffect generates the
+entrypoint exports and workflow bindings during Vite config resolution.
 
 ```ts
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -63,6 +65,38 @@ import { withCloudflareWorkflows } from "sideffect/vite";
 export default defineConfig({
   plugins: [withCloudflareWorkflows(cloudflare)],
 });
+```
+
+Your source `wrangler.jsonc` does not need a `workflows` field. The Vite build
+output `wrangler.json` includes generated workflow bindings, and Cloudflare's
+Vite plugin writes Wrangler's redirected deploy config.
+
+## Plain Wrangler
+
+Plain Wrangler cannot be zero-config today because Wrangler reads workflow
+bindings before `build.command` runs. Use Vite for the generated wiring path.
+
+The low-level escape hatch is still available:
+
+```ts
+import { WorkflowEntrypoints } from "sideffect/cloudflare";
+import { resizeImageLayer } from "./workflows/resize-image";
+
+export const { ResizeImage } = WorkflowEntrypoints.make({
+  ResizeImage: resizeImageLayer,
+});
+```
+
+```jsonc
+{
+  "workflows": [
+    {
+      "binding": "RESIZE_IMAGE",
+      "name": "resize-image",
+      "class_name": "ResizeImage",
+    },
+  ],
+}
 ```
 
 ## Development
