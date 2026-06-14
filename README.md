@@ -1,61 +1,53 @@
 # Sideffect
 
-Effect style typed workflow and step helpers for Cloudflare Workflows.
+Effect inspired typed workflow and step helpers for Cloudflare Workflows.
 
-API unstable.
+> ⚠️ Warning: The API experimental and is subject to change.
 
 ## Scope
 
-- No custom runtime.
-- No wrapped `fetch` handler.
+- No custom runtime or wrapped `fetch` handler.
 - Typed workflows and steps.
 - Generated workflow wiring.
-- 1:1 Cloudflare Workflows API Coverage
+- 1:1 Cloudflare Workflows API coverage.
 - Effect V4 is optional.
 
-## Imports
+## Writing Workflows
+
+Define your workflows in `src/workflows`. Each file exports a workflow layer; a typed description of the workflow's payload, its steps, and the logic that connects them.
 
 ```ts
-import { Workflow, Step, Rollback } from "sideffect";
-import { WorkflowEntrypoints } from "sideffect/cloudflare";
-import { withCloudflareWorkflows } from "sideffect/vite";
-```
+// src/workflows/my-workflow.ts
+import { Schema, Step, Workflow } from "sideffect";
 
-## Cloudflare Workflows
-
-Define workflows once with `Workflow.make(...).toLayer(...)`. In Vite projects,
-Sideffect discovers workflow files and generates the Cloudflare wiring.
-
-```ts
-// src/workflows/resize-image.ts
-import { Schema, Workflow } from "sideffect";
-
-const resizeImage = Workflow.make({
-  name: "resize-image",
-  payload: Schema.Struct({ imageId: Schema.String }),
+const workflow = Workflow.make({
+  name: "my-workflow",
+  payload: Schema.Struct({
+    email: Schema.String,
+    metadata: Schema.Record(Schema.String, Schema.String),
+  }),
 });
 
-export const resizeImageLayer = resizeImage.toLayer(async (workflow) => {
-  return { imageId: workflow.payload.imageId };
+const collectFiles = Step.make("collect files", {
+  payload: Schema.Struct({ email: Schema.String }),
+  result: Schema.Struct({ files: Schema.Array(Schema.String) }),
+  run: ({ email }) => ({
+    files: [`welcome-${email}.pdf`, "report.pdf"],
+  }),
+});
+
+export const myWorkflowLayer = workflow.toLayer(async (event, step) => {
+  const files = await step.do(collectFiles, { email: event.payload.email });
+  await step.sleep("wait briefly", "1 second");
+  return files;
 });
 ```
 
-Sideffect derives:
-
-```json
-{
-  "binding": "RESIZE_IMAGE",
-  "name": "resize-image",
-  "class_name": "ResizeImage"
-}
-```
-
-No `as ResizeImage` export alias is required.
+The workflow `name` controls how Sideffect and Cloudflare refer to the workflow. For `my-workflow`, the Cloudflare class name is `MyWorkflow` and the Worker binding is `MY_WORKFLOW`.
 
 ## Vite Adapter
 
-If a project already uses Cloudflare's Vite plugin, Sideffect generates the
-entrypoint exports and workflow bindings during Vite config resolution.
+The recommended setup uses Cloudflare's Vite plugin alongside Sideffect's adapter. Wrap `cloudflare` with `withCloudflareWorkflows` and the rest is automatic — Sideffect discovers your workflow layers and injects the generated entrypoints and Wrangler bindings into the build output.
 
 ```ts
 import { cloudflare } from "@cloudflare/vite-plugin";
@@ -67,33 +59,82 @@ export default defineConfig({
 });
 ```
 
-Your source `wrangler.jsonc` does not need a `workflows` field. The Vite build
-output `wrangler.json` includes generated workflow bindings, and Cloudflare's
-Vite plugin writes Wrangler's redirected deploy config.
+Your source `wrangler.jsonc` does not need a `workflows` field. Sideffect writes the workflow bindings into the Vite build output, which Cloudflare's plugin uses for deployment.
+
+Use the generated binding from your Worker as usual:
+
+```ts
+type Params = {
+  email: string;
+  metadata: Record<string, string>;
+};
+
+interface Env {
+  MY_WORKFLOW: Workflow<Params>;
+}
+
+export default {
+  async fetch(_req: Request, env: Env): Promise<Response> {
+    const instance = await env.MY_WORKFLOW.create({
+      params: {
+        email: "demo@example.com",
+        metadata: { source: "vite" },
+      },
+    });
+
+    return Response.json({ id: instance.id });
+  },
+};
+```
 
 ## Plain Wrangler
 
-Plain Wrangler cannot be zero-config today because Wrangler reads workflow
-bindings before `build.command` runs. Use Vite for the generated wiring path.
+Without the Vite adapter, Wrangler needs two things you provide manually: the native workflow class exported from your Worker entry, and the matching binding in `wrangler.jsonc`. Sideffect creates the class from your workflow layer via `WorkflowEntrypoints.make`.
 
-The low-level escape hatch is still available:
+Export the native workflow class alongside your Worker:
 
 ```ts
+// src/index.ts
 import { WorkflowEntrypoints } from "sideffect/cloudflare";
-import { resizeImageLayer } from "./workflows/resize-image";
+import { myWorkflowLayer } from "./workflows/my-workflow";
 
-export const { ResizeImage } = WorkflowEntrypoints.make({
-  ResizeImage: resizeImageLayer,
+type Params = {
+  email: string;
+  metadata: Record<string, string>;
+};
+
+interface Env {
+  MY_WORKFLOW: Workflow<Params>;
+}
+
+export const { MyWorkflow } = WorkflowEntrypoints.make({
+  MyWorkflow: myWorkflowLayer,
 });
+
+export default {
+  async fetch(_req: Request, env: Env): Promise<Response> {
+    const instance = await env.MY_WORKFLOW.create({
+      params: {
+        email: "demo@example.com",
+        metadata: { source: "wrangler" },
+      },
+    });
+
+    return Response.json({ id: instance.id });
+  },
+};
 ```
+
+Then register the workflow in your Wrangler config. The `class_name` must match the key passed to `WorkflowEntrypoints.make`, and `binding` is the property available on `env`:
 
 ```jsonc
 {
+  "main": "src/index.ts",
   "workflows": [
     {
-      "binding": "RESIZE_IMAGE",
-      "name": "resize-image",
-      "class_name": "ResizeImage",
+      "binding": "MY_WORKFLOW",
+      "name": "my-workflow",
+      "class_name": "MyWorkflow",
     },
   ],
 }
