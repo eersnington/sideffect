@@ -60,10 +60,8 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import { defineConfig } from "vite";
 import { withCloudflareWorkflows } from "sideffect/vite";
 
-const sideffect = withCloudflareWorkflows();
-
 export default defineConfig({
-  plugins: [sideffect, cloudflare(sideffect.cloudflare)],
+  plugins: [withCloudflareWorkflows(cloudflare)],
 });
 ```
 

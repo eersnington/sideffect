@@ -12,7 +12,11 @@ import {
   WorkflowEngine,
 } from "../src/index.ts";
 import { makeWorkflowEntrypoints } from "../src/entrypoints.ts";
-import { workflowConfigEntries, withCloudflareWorkflows } from "../src/vite.ts";
+import {
+  createSideffectWorkflowsPlugin,
+  workflowConfigEntries,
+  withCloudflareWorkflows,
+} from "../src/vite.ts";
 import type { NativeWorkflowStep, WorkflowEntrypointConstructor } from "../src/types.ts";
 import type { SideffectWorkflowsPlugin } from "../src/vite.ts";
 
@@ -314,20 +318,31 @@ test("workflow entrypoints reject invalid class names and non-layers", () => {
   ).toThrow(/WorkflowLayer/);
 });
 
-test("withCloudflareWorkflows captures native config and points Cloudflare at virtual entry", () => {
-  const plugin = withCloudflareWorkflows({
+test("withCloudflareWorkflows wraps the Cloudflare plugin factory", () => {
+  const plugins = withCloudflareWorkflows((config) => ({ name: "cloudflare", config }), {
+    worker: "./src/index.ts",
+  });
+
+  expect(plugins).toHaveLength(2);
+  expect(plugins[0]).toMatchObject({ name: "sideffect:cloudflare-workflows" });
+  expect(plugins[1]).toMatchObject({ name: "cloudflare" });
+});
+
+test("Sideffect workflows plugin captures native config and points Cloudflare at virtual entry", () => {
+  const plugin = createSideffectWorkflowsPlugin({
     config: (workerConfig) => ({ ...workerConfig, name: "app" }),
   });
 
   expect(plugin.name).toBe("sideffect:cloudflare-workflows");
   expect(typeof plugin.cloudflare.config).toBe("function");
 
+  const workerConfig = {
+    main: "./src/index.ts",
+    workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
+  };
   const result =
     typeof plugin.cloudflare.config === "function"
-      ? plugin.cloudflare.config({
-          main: "./src/index.ts",
-          workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
-        })
+      ? (plugin.cloudflare.config(workerConfig), workerConfig)
       : plugin.cloudflare.config;
 
   expect(result).toMatchObject({
@@ -338,8 +353,8 @@ test("withCloudflareWorkflows captures native config and points Cloudflare at vi
   expect(result).not.toHaveProperty("sideffect");
 });
 
-test("withCloudflareWorkflows skips external workflow script entries", async () => {
-  const plugin = withCloudflareWorkflows();
+test("Sideffect workflows plugin skips external workflow script entries", async () => {
+  const plugin = createSideffectWorkflowsPlugin();
   if (typeof plugin.cloudflare.config !== "function") {
     throw new Error("Expected cloudflare config customizer");
   }
@@ -369,14 +384,14 @@ test("withCloudflareWorkflows skips external workflow script entries", async () 
   expect(String(code)).not.toContain("ExternalWorkflow");
 });
 
-test("withCloudflareWorkflows resolves and loads virtual entry", async () => {
-  const plugin = withCloudflareWorkflows();
+test("Sideffect workflows plugin resolves and loads virtual entry", async () => {
+  const plugin = createSideffectWorkflowsPlugin();
   if (typeof plugin.cloudflare.config !== "function") {
     throw new Error("Expected cloudflare config customizer");
   }
 
   plugin.cloudflare.config({
-    main: "./src/index.ts",
+    main: "src/index.ts",
     workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
   });
   callConfigResolved(plugin, { root: "/app" });
@@ -399,8 +414,8 @@ test("withCloudflareWorkflows resolves and loads virtual entry", async () => {
   expect(String(code)).toContain("export const ResizeImage = __sideffect_entrypoints.ResizeImage");
 });
 
-test("withCloudflareWorkflows resolves worker main relative to configPath", async () => {
-  const plugin = withCloudflareWorkflows({ configPath: "cloudflare/wrangler.jsonc" });
+test("Sideffect workflows plugin resolves worker main relative to configPath", async () => {
+  const plugin = createSideffectWorkflowsPlugin({ configPath: "cloudflare/wrangler.jsonc" });
   if (typeof plugin.cloudflare.config !== "function") {
     throw new Error("Expected cloudflare config customizer");
   }
@@ -419,8 +434,8 @@ test("withCloudflareWorkflows resolves worker main relative to configPath", asyn
   });
 });
 
-test("withCloudflareWorkflows reports invalid virtual entry configuration", async () => {
-  const duplicate = withCloudflareWorkflows();
+test("Sideffect workflows plugin reports invalid virtual entry configuration", async () => {
+  const duplicate = createSideffectWorkflowsPlugin();
   if (typeof duplicate.cloudflare.config !== "function") {
     throw new Error("Expected cloudflare config customizer");
   }
@@ -435,7 +450,7 @@ test("withCloudflareWorkflows reports invalid virtual entry configuration", asyn
     }),
   ).toThrow(/Duplicate/);
 
-  const unresolved = withCloudflareWorkflows();
+  const unresolved = createSideffectWorkflowsPlugin();
   if (typeof unresolved.cloudflare.config !== "function") {
     throw new Error("Expected cloudflare config customizer");
   }

@@ -37,9 +37,7 @@ export interface WithCloudflareWorkflowsOptions extends CloudflarePluginConfig {
   readonly workflows?: WorkflowBindingDescriptors;
 }
 
-export interface SideffectWorkflowsPlugin extends Plugin {
-  readonly cloudflare: CloudflarePluginConfig;
-}
+export type CloudflarePluginFactory<Result = unknown> = (config?: any) => Result;
 
 export interface Plugin {
   readonly name: string;
@@ -69,7 +67,19 @@ interface ResolveContext {
   ): Promise<{ readonly id: string } | null>;
 }
 
-export function withCloudflareWorkflows(
+export function withCloudflareWorkflows<Result>(
+  cloudflare: CloudflarePluginFactory<Result>,
+  options: WithCloudflareWorkflowsOptions = {},
+): Array<Plugin | Result> {
+  const sideffect = createSideffectWorkflowsPlugin(options);
+  return [sideffect, cloudflare(sideffect.cloudflare)];
+}
+
+export interface SideffectWorkflowsPlugin extends Plugin {
+  readonly cloudflare: CloudflarePluginConfig;
+}
+
+export function createSideffectWorkflowsPlugin(
   options: WithCloudflareWorkflowsOptions = {},
 ): SideffectWorkflowsPlugin {
   const { worker, workflows, config, ...pluginConfig } = options;
@@ -111,11 +121,12 @@ export function withCloudflareWorkflows(
 
         assertUniqueWorkflowClassNames(captured.value.workflows);
 
-        return {
-          ...configured,
+        Object.assign(workerConfig as Record<string, unknown>, configured, {
           main: virtualEntry,
           workflows: mergedWorkflows,
-        };
+        });
+
+        return;
       },
     },
     configResolved(config) {
@@ -171,7 +182,7 @@ async function resolveVirtualEntryConfig(
 ): Promise<ResolvedVirtualEntryConfig> {
   if (!captured?.sourceMain) {
     throw new Error(
-      "Sideffect could not generate virtual:sideffect/entry because Cloudflare config was not captured. Use cloudflare(sideffect.cloudflare) with the same object returned by withCloudflareWorkflows().",
+      "Sideffect could not generate virtual:sideffect/entry because Cloudflare config was not captured. Use withCloudflareWorkflows(cloudflare) so Sideffect can configure Cloudflare's Vite plugin before it resolves the Worker entry.",
     );
   }
 
@@ -182,11 +193,13 @@ async function resolveVirtualEntryConfig(
 
   const baseDirectory = typeof configPath === "string" ? dirname(resolve(root, configPath)) : root;
   const importer = join(baseDirectory, "__sideffect_virtual_entry__.ts");
-  const resolved = await context.resolve(captured.sourceMain, importer, { skipSelf: true });
+  const resolved = await context.resolve(resolveSpecifier(captured.sourceMain), importer, {
+    skipSelf: true,
+  });
 
   if (!resolved) {
     throw new Error(
-      `Sideffect could not resolve the original Worker entry "${captured.sourceMain}" from "${baseDirectory}" while generating virtual:sideffect/entry. Check Wrangler main or pass withCloudflareWorkflows({ worker: "./src/index.ts" }).`,
+      `Sideffect could not resolve the original Worker entry "${captured.sourceMain}" from "${baseDirectory}" while generating virtual:sideffect/entry. Check Wrangler main or pass withCloudflareWorkflows(cloudflare, { worker: "./src/index.ts" }).`,
     );
   }
 
@@ -198,6 +211,19 @@ async function resolveVirtualEntryConfig(
 
 function normalizePath(path: string): string {
   return path.replace(/\\/g, "/");
+}
+
+function resolveSpecifier(specifier: string): string {
+  if (
+    specifier.startsWith(".") ||
+    specifier.startsWith("/") ||
+    specifier.includes(":") ||
+    !/\.[cm]?[jt]sx?$/.test(specifier)
+  ) {
+    return specifier;
+  }
+
+  return `./${specifier}`;
 }
 
 function generateVirtualEntryModule(config: ResolvedVirtualEntryConfig): string {
