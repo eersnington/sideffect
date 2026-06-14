@@ -22,7 +22,7 @@ export interface CloudflarePluginConfig {
   readonly config?: WorkerConfigCustomizer;
   readonly configPath?: string;
   readonly auxiliaryWorkers?: Array<unknown>;
-  readonly [key: string]: unknown;
+  readonly viteEnvironment?: unknown;
 }
 
 export interface WorkflowBindingDescriptor {
@@ -32,11 +32,11 @@ export interface WorkflowBindingDescriptor {
 }
 
 export type WorkflowBindingDescriptors = Record<string, WorkflowBindingDescriptor>;
-export type WorkflowDiscoveryPatterns = Array<string>;
+export type WorkflowDiscoveryPaths = Array<string>;
 
 export interface WithCloudflareWorkflowsOptions extends CloudflarePluginConfig {
   readonly worker?: string;
-  readonly workflows?: WorkflowBindingDescriptors | WorkflowDiscoveryPatterns;
+  readonly workflowPaths?: WorkflowDiscoveryPaths;
 }
 
 export type CloudflarePluginFactory<Result = unknown> = (config?: any) => Result;
@@ -94,13 +94,7 @@ export interface SideffectWorkflowsPlugin extends Plugin {
 export function createSideffectWorkflowsPlugin(
   options: WithCloudflareWorkflowsOptions = {},
 ): SideffectWorkflowsPlugin {
-  const { worker, workflows, config, ...pluginConfig } = options;
-  const programmaticWorkflowEntries = workflows
-    ? Array.isArray(workflows)
-      ? []
-      : workflowConfigEntries(workflows)
-    : [];
-  const workflowPatterns = Array.isArray(workflows) ? workflows : ["src/workflows"];
+  const { worker, workflowPaths = ["src/workflows"], config, ...pluginConfig } = options;
   const captured: { value?: CapturedWorkflowConfig } = {};
   let resolvedConfig: { readonly root: string } | undefined;
 
@@ -129,20 +123,19 @@ export function createSideffectWorkflowsPlugin(
         const configuredWorkflowEntries = Array.isArray(configured.workflows)
           ? (configured.workflows as Array<WorkflowConfigEntry>)
           : [];
-        const shouldDiscoverWorkflows =
-          configuredWorkflowEntries.length === 0 && programmaticWorkflowEntries.length === 0;
+        const shouldDiscoverWorkflows = configuredWorkflowEntries.length === 0;
         const baseDirectory = baseDirectoryForConfig(
           resolvedConfig?.root,
           plugin.cloudflare.configPath,
         );
         const discoveredWorkflows = shouldDiscoverWorkflows
-          ? collectWorkflowEntries(workflowPatterns, baseDirectory)
+          ? collectWorkflowEntries(workflowPaths, baseDirectory)
           : [];
         const discoveredWorkflowEntries = discoveredWorkflows.map((workflow) => workflow.config);
-        const mergedWorkflows = mergeWorkflowEntries(configured.workflows, [
-          ...discoveredWorkflowEntries,
-          ...programmaticWorkflowEntries,
-        ]);
+        const mergedWorkflows = mergeWorkflowEntries(
+          configured.workflows,
+          discoveredWorkflowEntries,
+        );
         captured.value = {
           sourceMain,
           workerName: configured.name,
@@ -210,7 +203,7 @@ export function workflowConfigEntries(
 }
 
 export function collectWorkflowEntries(
-  patterns: WorkflowDiscoveryPatterns | string = ["src/workflows"],
+  patterns: WorkflowDiscoveryPaths | string = ["src/workflows"],
   baseDirectory: string = process.cwd(),
 ): Array<CapturedWorkflow> {
   const roots = Array.isArray(patterns) ? patterns : [patterns];

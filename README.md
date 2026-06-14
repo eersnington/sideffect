@@ -55,9 +55,15 @@ import { defineConfig } from "vite";
 import { withCloudflareWorkflows } from "sideffect/vite";
 
 export default defineConfig({
-  plugins: [withCloudflareWorkflows(cloudflare)],
+  plugins: [
+    withCloudflareWorkflows(cloudflare, {
+      workflowPaths: ["src/jobs", "src/features/billing/workflows"],
+    }),
+  ],
 });
 ```
+
+By default Sideffect scans `src/workflows`. If your workflow files live elsewhere, pass `workflowPaths`.
 
 Your source `wrangler.jsonc` does not need a `workflows` field. Sideffect writes the workflow bindings into the Vite build output, which Cloudflare's plugin uses for deployment.
 
