@@ -1,4 +1,4 @@
-export { NonRetryableError, RollbackError } from "./errors.ts";
+export { NonRetryableError } from "./errors.ts";
 export { WorkflowEngine } from "./engine.ts";
 export { Rollback } from "./rollback.ts";
 export { Schema, TaggedError } from "./schema.ts";

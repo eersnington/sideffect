@@ -1,10 +1,8 @@
-import { RollbackError } from "./errors.ts";
 import { decodeWithSchema, runMaybeEffect } from "./runtime.ts";
 import { callNativeStep, runStepDefinition } from "./step.ts";
 import type {
   CloudflareWorkflowEventAny,
   NativeWorkflowStep,
-  RollbackContext,
   SideffectStep,
   StepDefinitionAny,
   StepOptions,
@@ -14,18 +12,13 @@ import type {
   WorkflowEvent,
   WorkflowLayerAny,
 } from "./types.ts";
+import type { WorkflowRollbackContext, WorkflowStepRollbackOptions } from "cloudflare:workers";
 
 interface EngineRunOptions {
   readonly env: unknown;
   readonly ctx: unknown;
   readonly event: WorkflowEvent<unknown>;
   readonly step: NativeWorkflowStep;
-}
-
-interface RollbackEntry {
-  readonly step: StepDefinitionAny;
-  readonly payload: unknown;
-  readonly result: unknown;
 }
 
 export const WorkflowEngine = {
@@ -50,28 +43,19 @@ export const WorkflowEngine = {
 
   async run<Result>(layer: WorkflowLayerAny, options: EngineRunOptions): Promise<Result> {
     const payload = decodeWorkflowPayload(layer, options.event.payload);
-    const rollbackStack: Array<RollbackEntry> = [];
-    const sideffectStep = makeSideffectStep(options, rollbackStack);
+    const sideffectStep = makeSideffectStep(options);
 
-    try {
-      return await runMaybeEffect(
-        layer.run(
-          {
-            payload,
-            event: options.event,
-            env: options.env,
-            ctx: options.ctx,
-          },
-          sideffectStep,
-        ),
-      );
-    } catch (failure) {
-      const rollbackFailures = await runRollbacks(rollbackStack, failure, options);
-      if (rollbackFailures.length > 0) {
-        throw new RollbackError(failure, rollbackFailures);
-      }
-      throw failure;
-    }
+    return await runMaybeEffect(
+      layer.run(
+        {
+          payload,
+          event: options.event,
+          env: options.env,
+          ctx: options.ctx,
+        },
+        sideffectStep,
+      ),
+    );
   },
 };
 
@@ -83,27 +67,25 @@ function decodeWorkflowPayload(layer: WorkflowLayerAny, payload: unknown): unkno
   );
 }
 
-function makeSideffectStep(
-  options: EngineRunOptions,
-  rollbackStack: Array<RollbackEntry>,
-): SideffectStep {
+function makeSideffectStep(options: EngineRunOptions): SideffectStep {
   return {
     async do<S extends StepDefinitionAny>(
       step: S,
       payload: StepPayload<S>,
       stepOptions?: StepOptions,
     ): Promise<StepResult<S>> {
-      const result = await callNativeStep(options.step, step.name, stepOptions, () =>
-        runStepDefinition(step, payload, {
-          env: options.env,
-          ctx: options.ctx,
-          step: options.step,
-        }),
+      const result = await callNativeStep(
+        options.step,
+        step.name,
+        stepOptions,
+        () =>
+          runStepDefinition(step, payload, {
+            env: options.env,
+            ctx: options.ctx,
+            step: options.step,
+          }),
+        makeRollbackOptions(step, payload, options),
       );
-
-      if (step.rollback) {
-        rollbackStack.push({ step, payload, result });
-      }
 
       return result as StepResult<S>;
     },
@@ -122,33 +104,31 @@ function makeSideffectStep(
   };
 }
 
-async function runRollbacks(
-  rollbackStack: Array<RollbackEntry>,
-  failure: unknown,
+function makeRollbackOptions(
+  step: StepDefinitionAny,
+  payload: unknown,
   options: EngineRunOptions,
-): Promise<Array<unknown>> {
-  const rollbackFailures: Array<unknown> = [];
+): WorkflowStepRollbackOptions<unknown> | undefined {
+  const rollback = step.rollback;
 
-  for (const entry of rollbackStack.toReversed()) {
-    if (!entry.step.rollback) {
-      continue;
-    }
+  if (!rollback) {
+    return undefined;
+  }
 
-    try {
+  return {
+    rollback: async (native: WorkflowRollbackContext<unknown>) => {
       await runMaybeEffect(
-        entry.step.rollback(entry.result, {
+        rollback(native.output, {
           env: options.env,
           ctx: options.ctx,
           step: options.step,
-          payload: entry.payload,
-          result: entry.result,
-          failure,
-        } as RollbackContext<unknown, unknown>),
+          payload,
+          result: native.output,
+          failure: native.error,
+          native,
+        }),
       );
-    } catch (rollbackFailure) {
-      rollbackFailures.push(rollbackFailure);
-    }
-  }
-
-  return rollbackFailures;
+    },
+    rollbackConfig: step.rollbackConfig,
+  };
 }

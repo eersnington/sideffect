@@ -7,7 +7,6 @@ import { expect, test } from "vite-plus/test";
 import {
   NonRetryableError,
   Rollback,
-  RollbackError,
   Schema,
   Step,
   TaggedError,
@@ -48,8 +47,9 @@ const fetchImage = Step.make("fetch image", {
 function fakeNativeStep(calls: Array<unknown> = []): NativeWorkflowStep {
   return {
     async do(...args: Array<unknown>) {
-      calls.push(args.slice(0, -1));
-      const callback = args.at(-1) as () => Promise<unknown>;
+      const callbackIndex = args.findIndex((arg) => typeof arg === "function");
+      const callback = args[callbackIndex] as () => Promise<unknown>;
+      calls.push(args.filter((_, index) => index !== callbackIndex));
       return callback();
     },
     async sleep(name, duration) {
@@ -212,7 +212,7 @@ test("invalid workflow payload becomes NonRetryableError", async () => {
   ).rejects.toBeInstanceOf(NonRetryableError);
 });
 
-test("rollback handlers run in reverse order and keep original failure", async () => {
+test("rollback handlers are registered as native Cloudflare rollback options", async () => {
   const rollbacks: Array<string> = [];
   const first = Step.make("first", {
     payload: Schema.String,
@@ -238,48 +238,97 @@ test("rollback handlers run in reverse order and keep original failure", async (
     await step.do(second, "b");
     throw failure;
   });
+  const calls: Array<unknown> = [];
 
   await expect(
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
       event: { payload: { imageId: "img_123" } },
-      step: fakeNativeStep(),
+      step: fakeNativeStep(calls),
     }),
   ).rejects.toBe(failure);
+  expect(rollbacks).toEqual([]);
+
+  const firstRollbackOptions = (calls[0] as Array<unknown>)[1] as {
+    readonly rollback: (context: {
+      readonly output: string;
+      readonly error: Error;
+      readonly stepName: string;
+    }) => Promise<void>;
+  };
+  const secondRollbackOptions = (calls[1] as Array<unknown>)[1] as {
+    readonly rollback: (context: {
+      readonly output: string;
+      readonly error: Error;
+      readonly stepName: string;
+    }) => Promise<void>;
+  };
+
+  await secondRollbackOptions.rollback({ output: "b", error: failure, stepName: "second" });
+  await firstRollbackOptions.rollback({ output: "a", error: failure, stepName: "first" });
+
   expect(rollbacks).toEqual(["second:b", "first:a"]);
 });
 
-test("rollback failures are reported with explicit rollback error", async () => {
-  const rollbackFailure = new Error("rollback failed");
-  const stepWithFailingRollback = Step.make("step with failing rollback", {
+test("rollback handlers receive context and forward rollback config", async () => {
+  const rollbackContexts: Array<unknown> = [];
+  const stepWithRollback = Step.make("step with rollback config", {
     payload: Schema.String,
     result: Schema.String,
     run: (value) => value,
   }).pipe(
-    Rollback.with(() => {
-      throw rollbackFailure;
-    }),
+    Rollback.with(
+      (result, context) => {
+        rollbackContexts.push({ result, context });
+      },
+      {
+        retries: { limit: 3, delay: "15 seconds", backoff: "linear" },
+        timeout: "2 minutes",
+      },
+    ),
   );
-  const workflowFailure = new Error("workflow failed");
+  const failure = new Error("workflow failed");
   const layer = imageWorkflow.toLayer(async (_workflow, step) => {
-    await step.do(stepWithFailingRollback, "value");
-    throw workflowFailure;
+    return step.do(stepWithRollback, "value");
+  });
+  const calls: Array<unknown> = [];
+
+  await WorkflowEngine.run(layer, {
+    env: { binding: true },
+    ctx: { request: true },
+    event: { payload: { imageId: "img_123" } },
+    step: fakeNativeStep(calls),
   });
 
-  try {
-    await WorkflowEngine.run(layer, {
-      env: {},
-      ctx: {},
-      event: { payload: { imageId: "img_123" } },
-      step: fakeNativeStep(),
-    });
-    throw new Error("Expected workflow to fail");
-  } catch (error) {
-    expect(error).toBeInstanceOf(RollbackError);
-    expect((error as RollbackError).failure).toBe(workflowFailure);
-    expect((error as RollbackError).rollbackFailures).toEqual([rollbackFailure]);
-  }
+  const rollbackOptions = (calls[0] as Array<unknown>)[1] as {
+    readonly rollback: (context: {
+      readonly output: string;
+      readonly error: Error;
+      readonly stepName: string;
+    }) => Promise<void>;
+    readonly rollbackConfig: unknown;
+  };
+  const nativeContext = { output: "value", error: failure, stepName: "step with rollback config" };
+
+  expect(rollbackOptions.rollbackConfig).toEqual({
+    retries: { limit: 3, delay: "15 seconds", backoff: "linear" },
+    timeout: "2 minutes",
+  });
+
+  await rollbackOptions.rollback(nativeContext);
+
+  expect(rollbackContexts).toEqual([
+    {
+      result: "value",
+      context: expect.objectContaining({
+        payload: "value",
+        result: "value",
+        failure,
+        native: nativeContext,
+      }),
+    },
+  ]);
 });
 
 test("sleep, sleepUntil, and waitForEvent delegate to native WorkflowStep", async () => {

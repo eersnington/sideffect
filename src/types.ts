@@ -1,8 +1,10 @@
 import type { Effect, Schema } from "effect";
 import type {
   WorkflowEvent as CloudflareWorkflowEvent,
+  WorkflowRollbackContext,
   WorkflowStepConfig,
   WorkflowStepEvent,
+  WorkflowStepRollbackOptions,
 } from "cloudflare:workers";
 
 export type MaybeEffect<A> = A | Promise<A> | Effect.Effect<A, unknown, never>;
@@ -36,7 +38,18 @@ export interface StepOptions {
 
 export interface NativeWorkflowStep {
   do<A>(name: string, callback: () => Promise<A> | A): Promise<A>;
-  do<A>(name: string, options: StepOptions, callback: () => Promise<A> | A): Promise<A>;
+  do<A>(
+    name: string,
+    callback: () => Promise<A> | A,
+    rollbackOptions: WorkflowStepRollbackOptions<A>,
+  ): Promise<A>;
+  do<A>(name: string, config: StepOptions, callback: () => Promise<A> | A): Promise<A>;
+  do<A>(
+    name: string,
+    config: StepOptions,
+    callback: () => Promise<A> | A,
+    rollbackOptions: WorkflowStepRollbackOptions<A>,
+  ): Promise<A>;
   sleep(name: string, duration: string | number): Promise<void>;
   sleepUntil(name: string, timestamp: Date | number): Promise<void>;
   waitForEvent<A = unknown>(
@@ -66,6 +79,7 @@ export interface StepDefinition<Payload, Result> {
   readonly resultSchema: Schema.Schema<Result>;
   readonly run: (payload: Payload, context: StepContext) => MaybeEffect<Result>;
   readonly rollback?: RollbackHandler<Payload, Result>;
+  readonly rollbackConfig?: WorkflowStepConfig;
   pipe<A>(fn: (self: StepDefinition<Payload, Result>) => A): A;
 }
 
@@ -77,12 +91,13 @@ export type StepResult<S> = S extends StepDefinition<any, infer Result> ? Result
 
 export interface RollbackContext<Payload, Result> extends StepContext {
   readonly payload: Payload;
-  readonly result: Result;
+  readonly result: Result | undefined;
   readonly failure: unknown;
+  readonly native: WorkflowRollbackContext<Result>;
 }
 
 export type RollbackHandler<Payload, Result> = (
-  result: Result,
+  result: Result | undefined,
   context: RollbackContext<Payload, Result>,
 ) => MaybeEffect<void>;
 

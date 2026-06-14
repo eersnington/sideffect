@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import type { WorkflowStepRollbackOptions } from "cloudflare:workers";
 
 import { decodeWithSchema, runMaybeEffect } from "./runtime.ts";
 import type {
@@ -35,6 +36,7 @@ export function makeStepDefinition<Payload, Result>(options: {
   readonly resultSchema: Schema.Schema<Result>;
   readonly run: StepDefinition<Payload, Result>["run"];
   readonly rollback?: RollbackHandler<Payload, Result>;
+  readonly rollbackConfig?: StepDefinition<Payload, Result>["rollbackConfig"];
 }): StepDefinition<Payload, Result> {
   return {
     _tag: "StepDefinition",
@@ -43,6 +45,7 @@ export function makeStepDefinition<Payload, Result>(options: {
     resultSchema: options.resultSchema,
     run: options.run,
     rollback: options.rollback,
+    rollbackConfig: options.rollbackConfig,
     pipe(fn) {
       return fn(this);
     },
@@ -80,8 +83,15 @@ export function callNativeStep<A>(
   name: string,
   options: StepOptions | undefined,
   callback: () => Promise<A>,
+  rollbackOptions?: WorkflowStepRollbackOptions<A>,
 ): Promise<A> {
-  return options === undefined
-    ? nativeStep.do(name, callback)
-    : nativeStep.do(name, options, callback);
+  if (options === undefined) {
+    return rollbackOptions === undefined
+      ? nativeStep.do(name, callback)
+      : nativeStep.do(name, callback, rollbackOptions);
+  }
+
+  return rollbackOptions === undefined
+    ? nativeStep.do(name, options, callback)
+    : nativeStep.do(name, options, callback, rollbackOptions);
 }
