@@ -1,5 +1,3 @@
-export { myWorkflowLayer as MyWorkflow } from "./workflow";
-
 type Params = {
   email: string;
   metadata: Record<string, string>;
