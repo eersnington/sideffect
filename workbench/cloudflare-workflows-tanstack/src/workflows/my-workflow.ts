@@ -1,7 +1,7 @@
 import { Schema, Step, Workflow } from "sideffect";
 
 const workflow = Workflow.make({
-  name: "my-workflow",
+  name: "tanstack-workflow",
   payload: Schema.Struct({ message: Schema.String }),
 });
 

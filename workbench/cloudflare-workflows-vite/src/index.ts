@@ -1,12 +1,3 @@
-type Params = {
-  email: string;
-  metadata: Record<string, string>;
-};
-
-interface Env {
-  MY_WORKFLOW: Workflow<Params>;
-}
-
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
