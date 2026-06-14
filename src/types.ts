@@ -106,6 +106,8 @@ export interface WorkflowLayer<Payload, Result = unknown> {
 
 export type WorkflowLayerAny = WorkflowLayer<any, any>;
 
+export type WorkflowLayerEntries = Record<string, WorkflowLayerAny>;
+
 export type WorkflowEntrypointConstructor = new (...args: Array<any>) => {
   readonly env?: unknown;
   readonly ctx?: unknown;
@@ -125,4 +127,6 @@ export interface WorkflowConfigEntry {
   readonly binding: string;
   readonly name: string;
   readonly class_name: string;
+  readonly script_name?: string;
+  readonly [key: string]: unknown;
 }

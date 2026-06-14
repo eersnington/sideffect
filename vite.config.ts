@@ -5,7 +5,10 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   pack: {
-    entry: ["src/index.ts", "src/vite.ts"],
+    entry: ["src/index.ts", "src/cloudflare.ts", "src/vite.ts"],
+    deps: {
+      neverBundle: ["cloudflare:workers"],
+    },
     dts: {
       tsgo: true,
     },

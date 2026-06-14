@@ -11,8 +11,10 @@ import {
   Workflow,
   WorkflowEngine,
 } from "../src/index.ts";
+import { makeWorkflowEntrypoints } from "../src/entrypoints.ts";
 import { workflowConfigEntries, withCloudflareWorkflows } from "../src/vite.ts";
-import type { NativeWorkflowStep } from "../src/types.ts";
+import type { NativeWorkflowStep, WorkflowEntrypointConstructor } from "../src/types.ts";
+import type { SideffectWorkflowsPlugin } from "../src/vite.ts";
 
 class MissingImage extends TaggedError("MissingImage")<{
   readonly imageId: string;
@@ -57,6 +59,30 @@ function fakeNativeStep(calls: Array<unknown> = []): NativeWorkflowStep {
       };
     },
   };
+}
+
+function callConfigResolved(plugin: SideffectWorkflowsPlugin, config: { readonly root: string }) {
+  const hook = (plugin as any)["configResolved"];
+  return typeof hook === "function" ? hook(config) : hook?.handler?.(config);
+}
+
+function callResolveId(plugin: SideffectWorkflowsPlugin, source: string) {
+  const hook = (plugin as any)["resolveId"];
+  return typeof hook === "function"
+    ? hook.call({}, source, undefined, {})
+    : hook?.handler?.call({}, source, undefined, {});
+}
+
+function callLoad(
+  plugin: SideffectWorkflowsPlugin,
+  context: {
+    readonly resolve: (source: string, importer: string) => Promise<{ id: string } | null>;
+  },
+) {
+  const hook = (plugin as any)["load"];
+  return typeof hook === "function"
+    ? hook.call(context, "\0virtual:sideffect/entry")
+    : hook?.handler?.call(context, "\0virtual:sideffect/entry");
 }
 
 test("workflow engine runs an async workflow through native step.do", async () => {
@@ -244,30 +270,188 @@ test("sleep, sleepUntil, and waitForEvent delegate to native WorkflowStep", asyn
   ]);
 });
 
-test("withCloudflareWorkflows composes Cloudflare config customizers", () => {
-  const config = withCloudflareWorkflows({
-    worker: "./src/index.ts",
+test("workflow entrypoints create native subclasses with generated run methods", async () => {
+  const layer = imageWorkflow.toLayer(async (workflow, step) => {
+    return step.do(fetchImage, { imageId: workflow.payload.imageId });
+  });
+  class FakeWorkflowEntrypoint {
+    readonly ctx: unknown;
+    readonly env: unknown;
+
+    constructor(ctx: unknown, env: unknown) {
+      this.ctx = ctx;
+      this.env = env;
+    }
+  }
+  const entrypoints = makeWorkflowEntrypoints(
+    { ResizeImage: layer },
+    { WorkflowEntrypoint: FakeWorkflowEntrypoint as WorkflowEntrypointConstructor },
+  );
+  const instance = new entrypoints.ResizeImage({}, { ok: true }) as {
+    run(event: unknown, step: NativeWorkflowStep): Promise<unknown>;
+  };
+
+  expect(entrypoints.ResizeImage.prototype).toBeInstanceOf(FakeWorkflowEntrypoint);
+  await expect(
+    instance.run({ payload: { imageId: "img_123" } }, fakeNativeStep()),
+  ).resolves.toEqual({ id: "img_123" });
+});
+
+test("workflow entrypoints reject invalid class names and non-layers", () => {
+  class FakeWorkflowEntrypoint {}
+
+  expect(() =>
+    makeWorkflowEntrypoints(
+      { "resize-image": imageWorkflow.toLayer(async () => undefined) },
+      { WorkflowEntrypoint: FakeWorkflowEntrypoint as WorkflowEntrypointConstructor },
+    ),
+  ).toThrow(/valid identifier/);
+  expect(() =>
+    makeWorkflowEntrypoints(
+      { ResizeImage: {} as never },
+      { WorkflowEntrypoint: FakeWorkflowEntrypoint as WorkflowEntrypointConstructor },
+    ),
+  ).toThrow(/WorkflowLayer/);
+});
+
+test("withCloudflareWorkflows captures native config and points Cloudflare at virtual entry", () => {
+  const plugin = withCloudflareWorkflows({
     config: (workerConfig) => ({ ...workerConfig, name: "app" }),
-    workflows: {
-      ResizeImage: {
-        module: "./src/resize-image.ts",
-        export: "resizeImageWorkflowLayer",
-      },
-    },
   });
 
-  expect(typeof config.config).toBe("function");
+  expect(plugin.name).toBe("sideffect:cloudflare-workflows");
+  expect(typeof plugin.cloudflare.config).toBe("function");
 
   const result =
-    typeof config.config === "function"
-      ? config.config({} as Parameters<typeof config.config>[0])
-      : config.config;
+    typeof plugin.cloudflare.config === "function"
+      ? plugin.cloudflare.config({
+          main: "./src/index.ts",
+          workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
+        })
+      : plugin.cloudflare.config;
 
   expect(result).toMatchObject({
     name: "app",
     main: "virtual:sideffect/entry",
     workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
   });
+  expect(result).not.toHaveProperty("sideffect");
+});
+
+test("withCloudflareWorkflows skips external workflow script entries", async () => {
+  const plugin = withCloudflareWorkflows();
+  if (typeof plugin.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  plugin.cloudflare.config({
+    main: "./src/index.ts",
+    name: "worker-a",
+    workflows: [
+      { binding: "Local", name: "local", class_name: "LocalWorkflow" },
+      {
+        binding: "External",
+        name: "external",
+        class_name: "ExternalWorkflow",
+        script_name: "worker-b",
+      },
+    ],
+  });
+
+  callConfigResolved(plugin, { root: "/app" });
+  const code = await callLoad(plugin, {
+    async resolve() {
+      return { id: "/app/src/index.ts" };
+    },
+  });
+
+  expect(String(code)).toContain("LocalWorkflow");
+  expect(String(code)).not.toContain("ExternalWorkflow");
+});
+
+test("withCloudflareWorkflows resolves and loads virtual entry", async () => {
+  const plugin = withCloudflareWorkflows();
+  if (typeof plugin.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  plugin.cloudflare.config({
+    main: "./src/index.ts",
+    workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
+  });
+  callConfigResolved(plugin, { root: "/app" });
+
+  expect(await callResolveId(plugin, "virtual:sideffect/entry")).toBe("\0virtual:sideffect/entry");
+
+  const code = await callLoad(plugin, {
+    async resolve(source: string, importer: string) {
+      expect(source).toBe("./src/index.ts");
+      expect(importer).toBe("/app/__sideffect_virtual_entry__.ts");
+      return { id: "/app/src/index.ts" };
+    },
+  });
+
+  expect(String(code)).toContain('import { WorkflowEntrypoints } from "sideffect/cloudflare"');
+  expect(String(code)).toContain('import * as __sideffect_worker from "/app/src/index.ts"');
+  expect(String(code)).toContain('export * from "/app/src/index.ts"');
+  expect(String(code)).toContain("export default __sideffect_worker.default ?? {}");
+  expect(String(code)).toContain("ResizeImage: __sideffectWorkflowLayer");
+  expect(String(code)).toContain("export const ResizeImage = __sideffect_entrypoints.ResizeImage");
+});
+
+test("withCloudflareWorkflows resolves worker main relative to configPath", async () => {
+  const plugin = withCloudflareWorkflows({ configPath: "cloudflare/wrangler.jsonc" });
+  if (typeof plugin.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  plugin.cloudflare.config({
+    main: "./worker.ts",
+    workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
+  });
+  callConfigResolved(plugin, { root: "/app" });
+
+  await callLoad(plugin, {
+    async resolve(_source: string, importer: string) {
+      expect(importer).toBe("/app/cloudflare/__sideffect_virtual_entry__.ts");
+      return { id: "/app/cloudflare/worker.ts" };
+    },
+  });
+});
+
+test("withCloudflareWorkflows reports invalid virtual entry configuration", async () => {
+  const duplicate = withCloudflareWorkflows();
+  if (typeof duplicate.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  expect(() =>
+    (duplicate.cloudflare.config as NonNullable<typeof duplicate.cloudflare.config> & Function)({
+      main: "./src/index.ts",
+      workflows: [
+        { binding: "A", name: "a", class_name: "Duplicate" },
+        { binding: "B", name: "b", class_name: "Duplicate" },
+      ],
+    }),
+  ).toThrow(/Duplicate/);
+
+  const unresolved = withCloudflareWorkflows();
+  if (typeof unresolved.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+  unresolved.cloudflare.config({
+    main: "./missing.ts",
+    workflows: [{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }],
+  });
+  callConfigResolved(unresolved, { root: "/app" });
+
+  await expect(
+    callLoad(unresolved, {
+      async resolve() {
+        return null;
+      },
+    }),
+  ).rejects.toThrow(/could not resolve/);
 });
 
 test("workflowConfigEntries derives native Cloudflare workflow config", () => {
