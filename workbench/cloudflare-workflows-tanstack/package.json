@@ -6,11 +6,10 @@
     "#/*": "./src/*"
   },
   "scripts": {
-    "dev": "vite dev --port 3000",
+    "dev": "vp dev --port 3000",
     "generate-routes": "tsr generate",
-    "build": "vite build",
-    "preview": "bun run build && vite preview",
-    "test": "vitest run",
+    "build": "vp build",
+    "preview": "bun run build && vp preview",
     "deploy": "bun run build && wrangler deploy",
     "cf-typegen": "wrangler types"
   },

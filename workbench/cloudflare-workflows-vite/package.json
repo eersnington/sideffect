@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "start": "vite dev",
-    "dev": "vite dev",
-    "build": "vite build",
+    "start": "vp dev",
+    "dev": "vp dev",
+    "build": "vp build",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
