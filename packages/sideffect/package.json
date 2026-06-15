@@ -1,0 +1,59 @@
+{
+  "name": "sideffect",
+  "version": "0.1.0",
+  "description": "An Effect V4 wrapper for Cloudflare Workflows.",
+  "homepage": "https://github.com/eersnington/sideeffect#readme",
+  "bugs": {
+    "url": "https://github.com/eersnington/sideeffect/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Eersnington",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eersnington/sideeffect.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./cloudflare": "./dist/cloudflare.mjs",
+    "./vite": "./dist/vite.mjs",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp run build",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.40.0",
+    "@cloudflare/workers-types": "4.20260605.1",
+    "@types/node": "25.6.2",
+    "@typescript/native-preview": "catalog:",
+    "bumpp": "11.1.0",
+    "effect": "4.0.0-beta.78",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@cloudflare/vite-plugin": "^1.40.0",
+    "@cloudflare/workers-types": ">=4.20260605.1",
+    "effect": ">=4.0.0-beta.75"
+  },
+  "peerDependenciesMeta": {
+    "@cloudflare/vite-plugin": {
+      "optional": true
+    },
+    "@cloudflare/workers-types": {
+      "optional": true
+    }
+  }
+}
