@@ -1,5 +1,7 @@
 import { decodeWithSchema, runMaybeEffect } from "./runtime.ts";
 import { callNativeStep, runStepDefinition } from "./step.ts";
+import { isSideffectNonRetryableError, toNativeNonRetryableError } from "./errors.ts";
+import type { NonRetryableErrorConstructor } from "./errors.ts";
 import type {
   CloudflareWorkflowEventAny,
   NativeWorkflowStep,
@@ -19,6 +21,28 @@ interface EngineRunOptions {
   readonly ctx: unknown;
   readonly event: WorkflowEvent<unknown>;
   readonly step: NativeWorkflowStep;
+  readonly NonRetryableError?: NonRetryableErrorConstructor;
+}
+
+interface EngineMakeOptions {
+  readonly NonRetryableError?: NonRetryableErrorConstructor;
+}
+
+/**
+ * Workers SDK treats workflow non-retryable failures by error name/message,
+ * not native constructor identity. We convert at the generated workflow
+ * boundary; step and rollback callbacks can keep the portable class as long as
+ * its name remains "NonRetryableError".
+ */
+function convertSideffectNonRetryableError(
+  error: unknown,
+  constructor: NonRetryableErrorConstructor | undefined,
+): never {
+  if (constructor && isSideffectNonRetryableError(error)) {
+    throw toNativeNonRetryableError(error, constructor);
+  }
+
+  throw error;
 }
 
 export const WorkflowEngine = {
@@ -26,6 +50,7 @@ export const WorkflowEngine = {
     exportName: string,
     layer: WorkflowLayerAny,
     WorkflowEntrypoint: WorkflowEntrypointConstructor,
+    makeOptions: EngineMakeOptions = {},
   ) {
     return {
       [exportName]: class extends WorkflowEntrypoint {
@@ -35,6 +60,7 @@ export const WorkflowEngine = {
             ctx: (this as { ctx?: unknown }).ctx,
             event: event as WorkflowEvent<unknown>,
             step,
+            NonRetryableError: makeOptions.NonRetryableError,
           });
         }
       },
@@ -42,28 +68,37 @@ export const WorkflowEngine = {
   },
 
   async run<Result>(layer: WorkflowLayerAny, options: EngineRunOptions): Promise<Result> {
-    const payload = decodeWorkflowPayload(layer, options.event.payload);
+    const payload = decodeWorkflowPayload(layer, options.event.payload, options);
     const sideffectStep = makeSideffectStep(options);
 
-    return await runMaybeEffect(
-      layer.run(
-        {
-          payload,
-          event: options.event,
-          env: options.env,
-          ctx: options.ctx,
-        },
-        sideffectStep,
-      ),
-    );
+    try {
+      return await runMaybeEffect(
+        layer.run(
+          {
+            payload,
+            event: options.event,
+            env: options.env,
+            ctx: options.ctx,
+          },
+          sideffectStep,
+        ),
+      );
+    } catch (error) {
+      convertSideffectNonRetryableError(error, options.NonRetryableError);
+    }
   },
 };
 
-function decodeWorkflowPayload(layer: WorkflowLayerAny, payload: unknown): unknown {
+function decodeWorkflowPayload(
+  layer: WorkflowLayerAny,
+  payload: unknown,
+  options: EngineRunOptions,
+): unknown {
   return decodeWithSchema(
     layer.workflow.payloadSchema,
     payload,
     `Workflow "${layer.workflow.name}" payload decoding`,
+    { NonRetryableError: options.NonRetryableError },
   );
 }
 
@@ -79,11 +114,18 @@ function makeSideffectStep(options: EngineRunOptions): SideffectStep {
         step.name,
         stepOptions,
         () =>
-          runStepDefinition(step, payload, {
-            env: options.env,
-            ctx: options.ctx,
-            step: options.step,
-          }),
+          runStepDefinition(
+            step,
+            payload,
+            {
+              env: options.env,
+              ctx: options.ctx,
+              step: options.step,
+            },
+            {
+              NonRetryableError: options.NonRetryableError,
+            },
+          ),
         makeRollbackOptions(step, payload, options),
       );
 

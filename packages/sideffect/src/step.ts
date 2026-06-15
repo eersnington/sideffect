@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import type { WorkflowStepRollbackOptions } from "cloudflare:workers";
 
 import { decodeWithSchema, runMaybeEffect } from "./runtime.ts";
+import type { RuntimeErrorOptions } from "./runtime.ts";
 import type {
   RollbackHandler,
   StepDefinition,
@@ -55,11 +56,13 @@ export function makeStepDefinition<Payload, Result>(options: {
 export function decodeStepPayload<S extends StepDefinition<any, any>>(
   step: S,
   payload: StepPayload<S>,
+  options?: RuntimeErrorOptions,
 ): StepPayload<S> {
   return decodeWithSchema(
     step.payloadSchema,
     payload,
     `Step "${step.name}" payload decoding`,
+    options,
   ) as StepPayload<S>;
 }
 
@@ -67,14 +70,16 @@ export async function runStepDefinition<S extends StepDefinition<any, any>>(
   step: S,
   payload: StepPayload<S>,
   context: Parameters<S["run"]>[1],
+  options?: RuntimeErrorOptions,
 ): Promise<StepResult<S>> {
-  const decodedPayload = decodeStepPayload(step, payload);
+  const decodedPayload = decodeStepPayload(step, payload, options);
   const result = await runMaybeEffect(step.run(decodedPayload, context));
 
   return decodeWithSchema(
     step.resultSchema,
     result,
     `Step "${step.name}" result decoding`,
+    options,
   ) as StepResult<S>;
 }
 

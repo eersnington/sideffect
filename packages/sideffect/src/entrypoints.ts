@@ -1,4 +1,5 @@
 import { WorkflowEngine } from "./engine.ts";
+import type { NonRetryableErrorConstructor } from "./errors.ts";
 import type {
   WorkflowEntrypointConstructor,
   WorkflowLayerAny,
@@ -7,6 +8,7 @@ import type {
 
 export interface WorkflowEntrypointsOptions {
   readonly WorkflowEntrypoint: WorkflowEntrypointConstructor;
+  readonly NonRetryableError?: NonRetryableErrorConstructor;
 }
 
 export function makeWorkflowEntrypoints<const Entries extends WorkflowLayerEntries>(
@@ -18,7 +20,9 @@ export function makeWorkflowEntrypoints<const Entries extends WorkflowLayerEntri
   for (const [className, layer] of Object.entries(entries)) {
     validateWorkflowExportName(className);
     validateWorkflowLayer(layer, className);
-    result[className] = WorkflowEngine.make(className, layer, options.WorkflowEntrypoint);
+    result[className] = WorkflowEngine.make(className, layer, options.WorkflowEntrypoint, {
+      NonRetryableError: options.NonRetryableError,
+    });
   }
 
   return result as { readonly [K in keyof Entries]: WorkflowEntrypointConstructor };

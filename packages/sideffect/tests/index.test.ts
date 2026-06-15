@@ -27,6 +27,13 @@ class MissingImage extends TaggedError("MissingImage")<{
   readonly imageId: string;
 }> {}
 
+class NativeNonRetryableError extends Error {
+  constructor(message: string, name = "NativeNonRetryableError") {
+    super(message);
+    this.name = name;
+  }
+}
+
 const imageWorkflow = Workflow.make({
   name: "image-workflow",
   payload: Schema.Struct({ imageId: Schema.String }),
@@ -215,6 +222,62 @@ test("invalid workflow payload becomes NonRetryableError", async () => {
       step: fakeNativeStep(),
     }),
   ).rejects.toBeInstanceOf(NonRetryableError);
+});
+
+test("workflow payload decoding uses injected native NonRetryableError", async () => {
+  const layer = imageWorkflow.toLayer(async () => undefined);
+
+  await expect(
+    WorkflowEngine.run(layer, {
+      env: {},
+      ctx: {},
+      event: { payload: { imageId: 123 } },
+      step: fakeNativeStep(),
+      NonRetryableError: NativeNonRetryableError,
+    }),
+  ).rejects.toMatchObject({
+    constructor: NativeNonRetryableError,
+    name: "NonRetryableError",
+  });
+});
+
+test("step schema decoding uses injected native NonRetryableError", async () => {
+  const layer = imageWorkflow.toLayer(async (_workflow, step) => {
+    return step.do(fetchImage, { imageId: 123 as never });
+  });
+
+  await expect(
+    WorkflowEngine.run(layer, {
+      env: {},
+      ctx: {},
+      event: { payload: { imageId: "img_123" } },
+      step: fakeNativeStep(),
+      NonRetryableError: NativeNonRetryableError,
+    }),
+  ).rejects.toMatchObject({
+    constructor: NativeNonRetryableError,
+    name: "NonRetryableError",
+  });
+});
+
+test("local NonRetryableError is converted when native constructor is injected", async () => {
+  const layer = imageWorkflow.toLayer(async () => {
+    throw new NonRetryableError("fatal workflow failure");
+  });
+
+  await expect(
+    WorkflowEngine.run(layer, {
+      env: {},
+      ctx: {},
+      event: { payload: { imageId: "img_123" } },
+      step: fakeNativeStep(),
+      NonRetryableError: NativeNonRetryableError,
+    }),
+  ).rejects.toMatchObject({
+    constructor: NativeNonRetryableError,
+    message: "fatal workflow failure",
+    name: "NonRetryableError",
+  });
 });
 
 test("rollback handlers are registered as native Cloudflare rollback options", async () => {

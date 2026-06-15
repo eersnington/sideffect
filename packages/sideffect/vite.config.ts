@@ -7,7 +7,7 @@ export default defineConfig({
   pack: {
     entry: ["src/index.ts", "src/cloudflare.ts", "src/vite.ts"],
     deps: {
-      neverBundle: ["cloudflare:workers"],
+      neverBundle: ["cloudflare:workers", "cloudflare:workflows"],
     },
     dts: {
       tsgo: true,
