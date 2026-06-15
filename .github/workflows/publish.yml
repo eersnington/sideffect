@@ -29,12 +29,19 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      - name: Test
+      - name: Check sideffect
+        working-directory: packages/sideffect
+        run: bun run check
+
+      - name: Test sideffect
+        working-directory: packages/sideffect
         run: bun run test
 
       # Build before publish so npm validates package.json after bin targets exist.
-      - name: Build
+      - name: Build sideffect
+        working-directory: packages/sideffect
         run: bun run build
 
-      - name: Publish (OIDC, no token)
+      - name: Publish sideffect (OIDC, no token)
+        working-directory: packages/sideffect
         run: npm publish --provenance
