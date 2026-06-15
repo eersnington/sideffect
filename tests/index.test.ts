@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vite-plus/test";
@@ -72,6 +72,11 @@ function fakeNativeStep(calls: Array<unknown> = []): NativeWorkflowStep {
 function callConfigResolved(plugin: SideffectWorkflowsPlugin, config: { readonly root: string }) {
   const hook = (plugin as any)["configResolved"];
   return typeof hook === "function" ? hook(config) : hook?.handler?.(config);
+}
+
+function callConfig(plugin: SideffectWorkflowsPlugin, config: { readonly root?: string }) {
+  const hook = (plugin as any)["config"];
+  return typeof hook === "function" ? hook(config, {}) : hook?.handler?.(config, {});
 }
 
 function callResolveId(plugin: SideffectWorkflowsPlugin, source: string) {
@@ -483,6 +488,71 @@ test("Sideffect workflows plugin discovers workflow bindings from workflow files
       expect(
         collectWorkflowEntries("src/workflows", root).map((workflow) => workflow.config),
       ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("Sideffect workflows plugin discovers workflows from Vite root before configResolved", () =>
+  withTempProject(
+    {
+      "src/index.ts": `export default { async fetch() { return new Response("ok"); } };`,
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+        const workflow = Workflow.make({ name: "my-workflow", payload: Schema.String });
+        export const myWorkflowLayer = workflow.toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      const plugin = createSideffectWorkflowsPlugin();
+      if (typeof plugin.cloudflare.config !== "function") {
+        throw new Error("Expected cloudflare config customizer");
+      }
+
+      callConfig(plugin, { root });
+      const workerConfig = { main: "src/index.ts" };
+      plugin.cloudflare.config(workerConfig);
+
+      expect(workerConfig).toMatchObject({
+        main: "virtual:sideffect/entry",
+        workflows: [{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }],
+      });
+
+      const envTypes = readFileSync(join(root, "sideffect-env.d.ts"), "utf8");
+      expect(envTypes).not.toContain("Workflow as CloudflareWorkflow");
+      expect(envTypes).not.toContain('from "cloudflare:workers"');
+      expect(envTypes).toContain(
+        "type __SideffectCloudflareWorkflow<Payload> = Workflow<Payload>;",
+      );
+      expect(envTypes).toContain("MY_WORKFLOW: __SideffectCloudflareWorkflow<");
+    },
+  ));
+
+test("Sideffect workflows plugin discovers workflows relative to configPath directory", () =>
+  withTempProject(
+    {
+      "cloudflare/src/index.ts": `export default { async fetch() { return new Response("ok"); } };`,
+      "cloudflare/src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+        const workflow = Workflow.make({ name: "my-workflow", payload: Schema.String });
+        export const myWorkflowLayer = workflow.toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      const plugin = createSideffectWorkflowsPlugin({ configPath: "cloudflare/wrangler.jsonc" });
+      if (typeof plugin.cloudflare.config !== "function") {
+        throw new Error("Expected cloudflare config customizer");
+      }
+
+      callConfig(plugin, { root });
+      const workerConfig = { main: "src/index.ts" };
+      plugin.cloudflare.config(workerConfig);
+
+      expect(workerConfig).toMatchObject({
+        main: "virtual:sideffect/entry",
+        workflows: [{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }],
+      });
+      expect(readFileSync(join(root, "cloudflare/sideffect-env.d.ts"), "utf8")).toContain(
+        "MY_WORKFLOW: __SideffectCloudflareWorkflow<",
+      );
     },
   ));
 
