@@ -5,10 +5,16 @@ export default defineConfig({
     "*": "vp check --fix",
   },
   fmt: {
-    ignorePatterns: ["workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts"],
+    ignorePatterns: [
+      "workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts",
+      "workbench/cloudflare-workflows-tanstack/sideffect-env.d.ts",
+    ],
   },
   lint: {
-    ignorePatterns: ["workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts"],
+    ignorePatterns: [
+      "workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts",
+      "workbench/cloudflare-workflows-tanstack/sideffect-env.d.ts",
+    ],
     options: { typeAware: true, typeCheck: true },
   },
   run: {

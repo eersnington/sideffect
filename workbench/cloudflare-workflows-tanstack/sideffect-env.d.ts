@@ -7,16 +7,12 @@ type __SideffectWorkflowPayload<T> = T extends WorkflowLayer<infer Payload, any>
 
 declare global {
   interface Env {
-    TANSTACK_WORKFLOW: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow0>
-    >;
+    TANSTACK_WORKFLOW: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow0>>;
   }
 
   namespace Cloudflare {
     interface Env {
-      TANSTACK_WORKFLOW: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow0>
-      >;
+      TANSTACK_WORKFLOW: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow0>>;
     }
   }
 }
