@@ -4,8 +4,13 @@ export default defineConfig({
   staged: {
     "*": "vp check --fix",
   },
-  fmt: {},
-  lint: { options: { typeAware: true, typeCheck: true } },
+  fmt: {
+    ignorePatterns: ["workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts"],
+  },
+  lint: {
+    ignorePatterns: ["workbench/cloudflare-workflows-tanstack/src/routeTree.gen.ts"],
+    options: { typeAware: true, typeCheck: true },
+  },
   run: {
     cache: true,
   },
