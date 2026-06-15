@@ -601,9 +601,85 @@ test("Sideffect workflows plugin skips external workflow script entries", async 
     },
   });
 
-  expect(String(code)).toContain("LocalWorkflow");
+  expect(String(code)).not.toContain("LocalWorkflow: __sideffectWorkflowLayer");
   expect(String(code)).not.toContain("ExternalWorkflow");
 });
+
+test("Sideffect workflows plugin preserves native workflow exports", async () => {
+  const plugin = createSideffectWorkflowsPlugin();
+  if (typeof plugin.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  plugin.cloudflare.config({
+    main: "src/index.ts",
+    workflows: [{ binding: "NATIVE", name: "native", class_name: "NativeWorkflow" }],
+  });
+  callConfigResolved(plugin, { root: "/app" });
+
+  const code = await callLoad(plugin, {
+    async resolve() {
+      return { id: "/app/src/index.ts" };
+    },
+  });
+
+  expect(String(code)).toContain('import * as __sideffect_worker from "/app/src/index.ts"');
+  expect(String(code)).toContain('export * from "/app/src/index.ts"');
+  expect(String(code)).toContain("export default __sideffect_worker.default ?? {}");
+  expect(String(code)).not.toContain("NativeWorkflow: __sideffectWorkflowLayer");
+  expect(String(code)).not.toContain(
+    "export const NativeWorkflow = __sideffect_entrypoints.NativeWorkflow",
+  );
+  expect(String(code)).not.toContain("WorkflowEntrypoints.make");
+});
+
+test("Sideffect workflows plugin wraps discovered workflows while preserving native workflows", () =>
+  withTempProject(
+    {
+      "src/index.ts": `
+        import { WorkflowEntrypoint } from "cloudflare:workers";
+
+        export class NativeWorkflow extends WorkflowEntrypoint {
+          async run() {}
+        }
+
+        export default { async fetch() { return new Response("ok"); } };
+      `,
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+        const workflow = Workflow.make({ name: "my-workflow", payload: Schema.String });
+        export const myWorkflowLayer = workflow.toLayer(async () => undefined);
+      `,
+    },
+    async (root) => {
+      const plugin = createSideffectWorkflowsPlugin();
+      if (typeof plugin.cloudflare.config !== "function") {
+        throw new Error("Expected cloudflare config customizer");
+      }
+
+      callConfig(plugin, { root });
+      plugin.cloudflare.config({
+        main: "src/index.ts",
+        workflows: [{ binding: "NATIVE", name: "native", class_name: "NativeWorkflow" }],
+      });
+      callConfigResolved(plugin, { root });
+
+      const code = await callLoad(plugin, {
+        async resolve() {
+          return { id: join(root, "src/index.ts") };
+        },
+      });
+
+      expect(String(code)).toContain("MyWorkflow: __sideffectWorkflowLayer");
+      expect(String(code)).toContain(
+        "export const MyWorkflow = __sideffect_entrypoints.MyWorkflow",
+      );
+      expect(String(code)).not.toContain("NativeWorkflow: __sideffectWorkflowLayer");
+      expect(String(code)).not.toContain(
+        "export const NativeWorkflow = __sideffect_entrypoints.NativeWorkflow",
+      );
+    },
+  ));
 
 test("Sideffect workflows plugin resolves and loads virtual entry", async () => {
   const plugin = createSideffectWorkflowsPlugin();
@@ -627,12 +703,13 @@ test("Sideffect workflows plugin resolves and loads virtual entry", async () => 
     },
   });
 
-  expect(String(code)).toContain('import { WorkflowEntrypoints } from "sideffect/cloudflare"');
   expect(String(code)).toContain('import * as __sideffect_worker from "/app/src/index.ts"');
   expect(String(code)).toContain('export * from "/app/src/index.ts"');
   expect(String(code)).toContain("export default __sideffect_worker.default ?? {}");
-  expect(String(code)).toContain("ResizeImage: __sideffectWorkflowLayer");
-  expect(String(code)).toContain("export const ResizeImage = __sideffect_entrypoints.ResizeImage");
+  expect(String(code)).not.toContain("ResizeImage: __sideffectWorkflowLayer");
+  expect(String(code)).not.toContain(
+    "export const ResizeImage = __sideffect_entrypoints.ResizeImage",
+  );
 });
 
 test("Sideffect workflows plugin resolves worker main relative to configPath", async () => {

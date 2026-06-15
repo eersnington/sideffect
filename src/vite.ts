@@ -57,10 +57,18 @@ interface CapturedWorkflowConfig {
   readonly workflows: Array<CapturedWorkflow>;
 }
 
-interface CapturedWorkflow {
+interface CapturedSideffectWorkflow {
+  readonly kind: "sideffect";
   readonly config: WorkflowConfigEntry;
-  readonly layer?: WorkflowLayerImport;
+  readonly layer: WorkflowLayerImport;
 }
+
+interface CapturedNativeWorkflow {
+  readonly kind: "native";
+  readonly config: WorkflowConfigEntry;
+}
+
+type CapturedWorkflow = CapturedSideffectWorkflow | CapturedNativeWorkflow;
 
 interface WorkflowLayerImport {
   readonly modulePath: string;
@@ -122,14 +130,8 @@ export function createSideffectWorkflowsPlugin(
           );
         }
 
-        const configuredWorkflowEntries = Array.isArray(configured.workflows)
-          ? (configured.workflows as Array<WorkflowConfigEntry>)
-          : [];
-        const shouldDiscoverWorkflows = configuredWorkflowEntries.length === 0;
         const baseDirectory = baseDirectoryForConfig(configRoot, plugin.cloudflare.configPath);
-        const discoveredWorkflows = shouldDiscoverWorkflows
-          ? collectWorkflowEntries(workflowPaths, baseDirectory)
-          : [];
+        const discoveredWorkflows = collectWorkflowEntries(workflowPaths, baseDirectory);
         const discoveredWorkflowEntries = discoveredWorkflows.map((workflow) => workflow.config);
         const mergedWorkflows = mergeWorkflowEntries(
           configured.workflows,
@@ -207,7 +209,7 @@ export function workflowConfigEntries(
 export function collectWorkflowEntries(
   patterns: WorkflowDiscoveryPaths | string = ["src/workflows"],
   baseDirectory: string = process.cwd(),
-): Array<CapturedWorkflow> {
+): Array<CapturedSideffectWorkflow> {
   const roots = Array.isArray(patterns) ? patterns : [patterns];
   return dedupeCapturedWorkflows(
     roots.flatMap((pattern) => collectWorkflowEntriesFromPath(pattern, baseDirectory)),
@@ -272,29 +274,29 @@ function resolveSpecifier(specifier: string): string {
 }
 
 function generateVirtualEntryModule(config: ResolvedVirtualEntryConfig): string {
-  const workflowImports = config.workflows
-    .map((workflow, index) => {
-      if (!workflow.layer) {
-        return undefined;
-      }
+  const sideffectWorkflows = config.workflows.filter(isSideffectWorkflow);
 
+  if (sideffectWorkflows.length === 0) {
+    return `import * as __sideffect_worker from ${JSON.stringify(config.workerImport)};
+
+export * from ${JSON.stringify(config.workerImport)};
+export default __sideffect_worker.default ?? {};
+`;
+  }
+
+  const workflowImports = sideffectWorkflows
+    .map((workflow, index) => {
       return `import { ${workflow.layer.exportName} as __sideffect_workflow_${index} } from ${JSON.stringify(workflow.layer.modulePath)};`;
     })
-    .filter((line): line is string => Boolean(line))
     .join("\n");
-  const entries = config.workflows
+  const entries = sideffectWorkflows
     .map((workflow, index) => {
       const className = workflow.config.class_name;
       const literal = JSON.stringify(className);
-      const moduleExpression = workflow.layer
-        ? `__sideffect_workflow_${index}`
-        : `__sideffect_worker`;
-      const modulePath = workflow.layer?.modulePath ?? config.workerImport;
-      const exportName = workflow.layer ? "default" : className;
-      return `  ${className}: __sideffectWorkflowLayer(${moduleExpression}, ${JSON.stringify(exportName)}, ${literal}, ${JSON.stringify(modulePath)}),`;
+      return `  ${className}: __sideffectWorkflowLayer(__sideffect_workflow_${index}, ${JSON.stringify("default")}, ${literal}, ${JSON.stringify(workflow.layer.modulePath)}),`;
     })
     .join("\n");
-  const exports = config.workflows
+  const exports = sideffectWorkflows
     .map(
       (workflow) =>
         `export const ${workflow.config.class_name} = __sideffect_entrypoints.${workflow.config.class_name};`,
@@ -325,37 +327,35 @@ ${exports}
 }
 
 function writeWorkflowEnvTypes(root: string, workflows: Array<CapturedWorkflow>): void {
-  if (!workflows.some((workflow) => workflow.layer)) {
+  const sideffectWorkflows = workflows.filter(isSideffectWorkflow);
+  if (sideffectWorkflows.length === 0) {
     return;
   }
 
-  writeFileSync(join(root, "sideffect-env.d.ts"), generateWorkflowEnvTypes(root, workflows));
+  writeFileSync(
+    join(root, "sideffect-env.d.ts"),
+    generateWorkflowEnvTypes(root, sideffectWorkflows),
+  );
 }
 
-function generateWorkflowEnvTypes(root: string, workflows: Array<CapturedWorkflow>): string {
+function generateWorkflowEnvTypes(
+  root: string,
+  workflows: Array<CapturedSideffectWorkflow>,
+): string {
   const imports = workflows
     .map((workflow, index) => {
-      if (!workflow.layer) {
-        return undefined;
-      }
-
       return `import type { ${workflow.layer.exportName} as __SideffectWorkflow${index} } from ${JSON.stringify(relativeTypeImport(root, workflow.layer.modulePath))};`;
     })
-    .filter((line): line is string => Boolean(line))
     .join("\n");
   const envBindings = workflows
     .map((workflow, index) => {
-      const payload = workflow.layer
-        ? `__SideffectWorkflowPayload<typeof __SideffectWorkflow${index}>`
-        : "unknown";
+      const payload = `__SideffectWorkflowPayload<typeof __SideffectWorkflow${index}>`;
       return `    ${workflow.config.binding}: __SideffectCloudflareWorkflow<${payload}>;`;
     })
     .join("\n");
   const cloudflareEnvBindings = workflows
     .map((workflow, index) => {
-      const payload = workflow.layer
-        ? `__SideffectWorkflowPayload<typeof __SideffectWorkflow${index}>`
-        : "unknown";
+      const payload = `__SideffectWorkflowPayload<typeof __SideffectWorkflow${index}>`;
       return `      ${workflow.config.binding}: __SideffectCloudflareWorkflow<${payload}>;`;
     })
     .join("\n");
@@ -407,7 +407,7 @@ function descriptorName(modulePath: string): string {
 function collectWorkflowEntriesFromPath(
   pattern: string,
   baseDirectory: string,
-): Array<CapturedWorkflow> {
+): Array<CapturedSideffectWorkflow> {
   const root = resolve(baseDirectory, pattern.replace(/\*.*$/, ""));
   if (!existsSync(root)) {
     return [];
@@ -440,14 +440,14 @@ function isSourceFile(path: string): boolean {
 function collectWorkflowEntriesFromFile(
   filePath: string,
   visited: Set<string>,
-): Array<CapturedWorkflow> {
+): Array<CapturedSideffectWorkflow> {
   if (visited.has(filePath)) {
     return [];
   }
   visited.add(filePath);
 
   const source = readFileSync(filePath, "utf8");
-  const entries: Array<CapturedWorkflow> = [];
+  const entries: Array<CapturedSideffectWorkflow> = [];
 
   for (const match of source.matchAll(/export\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']/g)) {
     const specifier = match[2];
@@ -549,9 +549,10 @@ function capturedWorkflow(
   workflowName: string,
   filePath: string,
   exportName: string,
-): CapturedWorkflow {
+): CapturedSideffectWorkflow {
   const className = classNameFromWorkflowName(workflowName);
   return {
+    kind: "sideffect",
     config: workflowConfigEntry(className, workflowName),
     layer: {
       modulePath: normalizePath(filePath),
@@ -585,12 +586,18 @@ function bindingName(workflowName: string): string {
     .toUpperCase();
 }
 
-function dedupeCapturedWorkflows(entries: Array<CapturedWorkflow>): Array<CapturedWorkflow> {
-  const byClassName = new Map<string, CapturedWorkflow>();
+function dedupeCapturedWorkflows<const Entry extends CapturedWorkflow>(
+  entries: Array<Entry>,
+): Array<Entry> {
+  const byClassName = new Map<string, Entry>();
   for (const entry of entries) {
     byClassName.set(entry.config.class_name, entry);
   }
   return [...byClassName.values()];
+}
+
+function isSideffectWorkflow(workflow: CapturedWorkflow): workflow is CapturedSideffectWorkflow {
+  return workflow.kind === "sideffect";
 }
 
 function resolveSourceFile(baseDirectory: string, specifier: string): string | undefined {
@@ -653,7 +660,7 @@ function localWorkflowEntries(
 
 function capturedLocalWorkflowEntries(
   entries: Array<WorkflowConfigEntry>,
-  discovered: Array<CapturedWorkflow>,
+  discovered: Array<CapturedSideffectWorkflow>,
   workerName: string | undefined,
 ): Array<CapturedWorkflow> {
   const discoveredByClassName = new Map(
@@ -661,7 +668,7 @@ function capturedLocalWorkflowEntries(
   );
 
   return localWorkflowEntries(entries, workerName).map(
-    (entry) => discoveredByClassName.get(entry.class_name) ?? { config: entry },
+    (entry) => discoveredByClassName.get(entry.class_name) ?? { kind: "native", config: entry },
   );
 }
 
