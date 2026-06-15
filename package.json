@@ -11,7 +11,7 @@
     "build": "vp run -r build",
     "build:sideffect": "vp run sideffect#build",
     "check": "vp check",
-    "test": "vp run -r test",
+    "test": "vp run --filter \"./packages/*\" test",
     "prepare": "vp config"
   },
   "devDependencies": {
