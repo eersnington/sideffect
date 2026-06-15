@@ -4,13 +4,14 @@
   "private": false,
   "workspaces": [
     "packages/*",
-    "workbench/*",
-    "tools/*"
+    "workbench/*"
   ],
   "type": "module",
   "scripts": {
-    "ready": "vp check && vp run -r test && vp run -r build",
-    "dev": "vp run website#dev",
+    "build": "vp run -r build",
+    "build:sideffect": "vp run sideffect#build",
+    "check": "vp check",
+    "test": "vp run -r test",
     "prepare": "vp config"
   },
   "devDependencies": {
