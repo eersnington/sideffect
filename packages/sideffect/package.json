@@ -2,7 +2,7 @@
   "name": "sideffect",
   "version": "0.2.0",
   "description": "Build Cloudflare Workflows from reusable typed steps, with Vite-generated workflow config.",
-  "homepage": "https://github.com/eersnington/sideeffect#readme",
+  "homepage": "https://github.com/eersnington/sideffect#readme",
   "bugs": {
     "url": "https://github.com/eersnington/sideffect/issues"
   },
