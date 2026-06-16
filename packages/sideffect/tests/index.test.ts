@@ -590,7 +590,7 @@ test("withCloudflareWorkflows wraps the Cloudflare plugin factory", () => {
 
 test("Sideffect workflows plugin captures native config and points Cloudflare at virtual entry", () => {
   const plugin = createSideffectWorkflowsPlugin({
-    config: (workerConfig) => ({ ...workerConfig, name: "app" }),
+    config: () => ({ name: "app" }),
   });
 
   expect(plugin.name).toBe("sideffect:cloudflare-workflows");
@@ -633,6 +633,38 @@ test("Sideffect workflows plugin preserves existing Cloudflare bindings", () => 
     durable_objects: { bindings: [{ name: "COUNTER", class_name: "Counter" }] },
     workflows: [{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }],
   });
+});
+
+test("Sideffect workflows plugin deep-merges returned config like Cloudflare", () => {
+  const plugin = createSideffectWorkflowsPlugin({
+    config: () => ({
+      compatibility_flags: ["nodejs_compat"],
+      durable_objects: {
+        migrations: [{ tag: "v1", new_sqlite_classes: ["Counter"] }],
+      },
+    }),
+  });
+  if (typeof plugin.cloudflare.config !== "function") {
+    throw new Error("Expected cloudflare config customizer");
+  }
+
+  const workerConfig = {
+    main: "./src/index.ts",
+    compatibility_flags: ["streams_enable_constructors"],
+    durable_objects: { bindings: [{ name: "COUNTER", class_name: "Counter" }] },
+  };
+  plugin.cloudflare.config(workerConfig);
+
+  expect(workerConfig).toMatchObject({
+    main: "virtual:sideffect/entry",
+    durable_objects: {
+      bindings: [{ name: "COUNTER", class_name: "Counter" }],
+      migrations: [{ tag: "v1", new_sqlite_classes: ["Counter"] }],
+    },
+  });
+  expect(workerConfig.compatibility_flags).toEqual(
+    expect.arrayContaining(["streams_enable_constructors", "nodejs_compat"]),
+  );
 });
 
 test("Sideffect workflows plugin discovers workflow bindings from workflow files", () =>

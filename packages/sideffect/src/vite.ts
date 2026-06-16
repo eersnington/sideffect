@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
+import { defu } from "defu";
+
 import { validateWorkflowExportName } from "./entrypoints.ts";
 import type { WorkflowConfigEntry } from "./types.ts";
 
@@ -632,12 +634,9 @@ function applyConfigCustomizer(
   workerConfig: WorkerConfig,
   args: Array<any>,
 ): WorkerConfig {
-  if (typeof config === "function") {
-    const result = config(workerConfig, ...args);
-    return result ? { ...workerConfig, ...result } : workerConfig;
-  }
+  const result = typeof config === "function" ? config(workerConfig, ...args) : config;
 
-  return config ? { ...workerConfig, ...config } : workerConfig;
+  return result ? (defu(result, workerConfig) as WorkerConfig) : workerConfig;
 }
 
 function mergeWorkflowEntries(

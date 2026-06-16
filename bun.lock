@@ -10,13 +10,14 @@
     },
     "packages/sideffect": {
       "name": "sideffect",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "devDependencies": {
         "@cloudflare/vite-plugin": "^1.40.0",
         "@cloudflare/workers-types": "4.20260605.1",
         "@types/node": "25.6.2",
         "@typescript/native-preview": "catalog:",
         "bumpp": "11.1.0",
+        "defu": "^6.1.4",
         "effect": "4.0.0-beta.78",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -81,7 +82,6 @@
       "name": "cloudflare-workflows-vite",
       "version": "0.0.0",
       "dependencies": {
-        "effect": "4.0.0-beta.78",
         "sideffect": "workspace:",
       },
       "devDependencies": {
