@@ -780,6 +780,163 @@ test("workflow collector discovers direct Workflow.make(...).toLayer exports", (
     },
   ));
 
+test("workflow collector discovers locally exported direct workflow layers", () =>
+  withTempProject(
+    {
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        const myWorkflowLayer = Workflow.make<{ id: string }>({
+          payload: Schema.Struct({ id: Schema.String }),
+          name: "my-workflow",
+        }).toLayer(async () => undefined);
+
+        export { myWorkflowLayer };
+      `,
+    },
+    (root) => {
+      expect(
+        collectWorkflowEntries("src/workflows", root).map((workflow) => workflow.config),
+      ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("workflow collector discovers aliased Workflow imports and export aliases", () =>
+  withTempProject(
+    {
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow as W } from "sideffect";
+
+        const layer = W.make({
+          name: \`my-workflow\`,
+          payload: Schema.String,
+        }).toLayer(async () => undefined);
+
+        export { layer as myWorkflowLayer };
+      `,
+    },
+    (root) => {
+      const workflows = collectWorkflowEntries("src/workflows", root);
+      expect(workflows.map((workflow) => workflow.config)).toEqual([
+        { binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" },
+      ]);
+      expect(workflows[0]?.layer.exportName).toBe("myWorkflowLayer");
+    },
+  ));
+
+test("workflow collector follows local workflow re-export chains", () =>
+  withTempProject(
+    {
+      "src/workflows/index.ts": `export * from "./barrel";`,
+      "src/workflows/barrel.ts": `export { layer as myWorkflowLayer } from "./my-workflow";`,
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        const workflow = Workflow.make({ name: "my-workflow", payload: Schema.String });
+        export const layer = workflow.toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      expect(
+        collectWorkflowEntries("src/workflows/index.ts", root).map((workflow) => workflow.config),
+      ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("workflow collector does not hang on re-export cycles", () =>
+  withTempProject(
+    {
+      "src/workflows/a.ts": `export * from "./b";`,
+      "src/workflows/b.ts": `
+        export * from "./a";
+        import { Schema, Workflow } from "sideffect";
+
+        const workflow = Workflow.make({ name: "my-workflow", payload: Schema.String });
+        export const layer = workflow.toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      expect(
+        collectWorkflowEntries("src/workflows/a.ts", root).map((workflow) => workflow.config),
+      ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("workflow collector ignores comments, strings, and type-only exports", () =>
+  withTempProject(
+    {
+      "src/workflows/my-workflow.ts": `
+        // export const fake = Workflow.make({ name: "fake", payload: Schema.String }).toLayer();
+        const fake = 'export const fake = Workflow.make({ name: "fake", payload: Schema.String }).toLayer();';
+        type NotAWorkflow = unknown;
+        export type { NotAWorkflow };
+      `,
+    },
+    (root) => {
+      expect(collectWorkflowEntries("src/workflows", root)).toEqual([]);
+    },
+  ));
+
+test("workflow collector returns source files in deterministic order", () =>
+  withTempProject(
+    {
+      "src/workflows/b.ts": `
+        import { Schema, Workflow } from "sideffect";
+        export const layer = Workflow.make({ name: "b", payload: Schema.String }).toLayer(async () => undefined);
+      `,
+      "src/workflows/a.ts": `
+        import { Schema, Workflow } from "sideffect";
+        export const layer = Workflow.make({ name: "a", payload: Schema.String }).toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      expect(
+        collectWorkflowEntries("src/workflows", root).map((workflow) => workflow.config.name),
+      ).toEqual(["a", "b"]);
+    },
+  ));
+
+test("workflow collector supports direct workflow file paths", () =>
+  withTempProject(
+    {
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+        export const layer = Workflow.make({ name: "my-workflow", payload: Schema.String }).toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      expect(
+        collectWorkflowEntries("src/workflows/my-workflow.ts", root).map(
+          (workflow) => workflow.config,
+        ),
+      ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("workflow collector ignores non-source file paths", () =>
+  withTempProject(
+    {
+      "src/workflows/readme.md": `
+        export const layer = Workflow.make({ name: "fake", payload: Schema.String }).toLayer();
+      `,
+    },
+    (root) => {
+      expect(collectWorkflowEntries("src/workflows/readme.md", root)).toEqual([]);
+    },
+  ));
+
+test("workflow collector ignores declaration files", () =>
+  withTempProject(
+    {
+      "src/workflows/types.d.ts": `
+        export declare const layer: Workflow.make({ name: "fake", payload: Schema.String }).toLayer();
+      `,
+    },
+    (root) => {
+      expect(collectWorkflowEntries("src/workflows", root)).toEqual([]);
+    },
+  ));
+
 test("Sideffect workflows plugin skips external workflow script entries", async () => {
   const plugin = createSideffectWorkflowsPlugin();
   if (typeof plugin.cloudflare.config !== "function") {

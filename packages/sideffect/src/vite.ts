@@ -1,13 +1,25 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve } from "node:path";
 
 import { defu } from "defu";
+import ts from "typescript";
 
 import { validateWorkflowExportName } from "./entrypoints.ts";
 import type { WorkflowConfigEntry } from "./types.ts";
 
 const virtualEntry = "virtual:sideffect/entry";
 const resolvedVirtualEntry = `\0${virtualEntry}`;
+const sourceFileExtensions = new Set([
+  ".ts",
+  ".tsx",
+  ".mts",
+  ".cts",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+]);
+const declarationFileExtensions = [".d.ts", ".d.mts", ".d.cts"];
 
 export interface WorkerConfig {
   readonly main?: string;
@@ -76,6 +88,20 @@ interface WorkflowLayerImport {
   readonly modulePath: string;
   readonly exportName: string;
 }
+
+interface DiscoveredWorkflowExport {
+  readonly workflowName: string;
+  readonly modulePath: string;
+  readonly exportName: string;
+}
+
+type ReExportDeclaration =
+  | {
+      readonly kind: "named";
+      readonly specifier: string;
+      readonly exports: Array<{ readonly imported: string; readonly exported: string }>;
+    }
+  | { readonly kind: "all"; readonly specifier: string };
 
 interface ResolvedVirtualEntryConfig {
   readonly workerImport: string;
@@ -421,130 +447,377 @@ function collectWorkflowEntriesFromPath(
 }
 
 function sourceFiles(path: string): Array<string> {
-  if (!existsSync(path)) {
+  const stats = statSync(path, { throwIfNoEntry: false });
+  if (!stats) {
     return [];
   }
 
-  if (isSourceFile(path)) {
-    return [path];
+  if (stats.isFile()) {
+    return isSourceFile(path) ? [path] : [];
   }
 
-  return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
-    const child = join(path, entry.name);
-    return entry.isDirectory() ? sourceFiles(child) : isSourceFile(child) ? [child] : [];
-  });
+  if (!stats.isDirectory()) {
+    return [];
+  }
+
+  return readdirSync(path, { withFileTypes: true })
+    .sort((left, right) => left.name.localeCompare(right.name))
+    .flatMap((entry) => {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) {
+        return sourceFiles(child);
+      }
+      if (entry.isFile() && isSourceFile(child)) {
+        return [child];
+      }
+      return [];
+    });
 }
 
 function isSourceFile(path: string): boolean {
-  return /\.[cm]?[jt]sx?$/.test(path);
+  return (
+    sourceFileExtensions.has(extname(path)) &&
+    !declarationFileExtensions.some((extension) => path.endsWith(extension))
+  );
 }
 
 function collectWorkflowEntriesFromFile(
   filePath: string,
   visited: Set<string>,
 ): Array<CapturedSideffectWorkflow> {
+  return dedupeCapturedWorkflows(
+    [...collectWorkflowExportsFromFile(filePath, visited).values()].map((workflow) =>
+      capturedWorkflow(workflow.workflowName, workflow.modulePath, workflow.exportName),
+    ),
+  );
+}
+
+function collectWorkflowExportsFromFile(
+  filePath: string,
+  visited: Set<string>,
+): Map<string, DiscoveredWorkflowExport> {
   if (visited.has(filePath)) {
-    return [];
+    return new Map();
   }
   visited.add(filePath);
 
-  const source = readFileSync(filePath, "utf8");
-  const entries: Array<CapturedSideffectWorkflow> = [];
+  const analysis = analyzeWorkflowSourceFile(filePath);
+  const exports = new Map(analysis.exports);
 
-  for (const match of source.matchAll(/export\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']/g)) {
-    const specifier = match[2];
-    if (!specifier || isExternalModuleSpecifier(specifier)) {
+  for (const reExport of analysis.reExports) {
+    if (isExternalModuleSpecifier(reExport.specifier)) {
       continue;
     }
-    const resolved = resolveSourceFile(dirname(filePath), specifier);
+
+    const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
     if (!resolved) {
       throw new Error(
-        `Sideffect could not resolve workflow re-export module "${specifier}" from "${filePath}" while generating Cloudflare workflow bindings.`,
+        `Sideffect could not resolve workflow re-export module "${reExport.specifier}" from "${filePath}" while generating Cloudflare workflow bindings.`,
       );
     }
 
-    const moduleWorkflows = collectLocalWorkflowExports(resolved);
-    for (const exportEntry of parseExportSpecifiers(match[1] ?? "")) {
-      const workflowName = moduleWorkflows.get(exportEntry.imported);
-      if (!workflowName) {
-        continue;
+    const targetExports = collectWorkflowExportsFromFile(resolved, visited);
+    if (reExport.kind === "all") {
+      for (const [exportName, workflow] of targetExports) {
+        exports.set(exportName, workflow);
       }
-      entries.push(capturedWorkflow(workflowName, resolved, exportEntry.imported));
+      continue;
+    }
+
+    for (const exportEntry of reExport.exports) {
+      const workflow = targetExports.get(exportEntry.imported);
+      if (workflow) {
+        exports.set(exportEntry.exported, workflow);
+      }
     }
   }
 
-  const localWorkflows = collectLocalWorkflowExports(filePath);
-  for (const [exportName, workflowName] of localWorkflows) {
-    entries.push(capturedWorkflow(workflowName, filePath, exportName));
-  }
-
-  return dedupeCapturedWorkflows(entries);
+  return exports;
 }
 
-function collectLocalWorkflowExports(filePath: string): Map<string, string> {
+function analyzeWorkflowSourceFile(filePath: string): {
+  readonly exports: Map<string, DiscoveredWorkflowExport>;
+  readonly reExports: Array<ReExportDeclaration>;
+} {
   const source = readFileSync(filePath, "utf8");
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    source,
+    ts.ScriptTarget.Latest,
+    false,
+    scriptKindForFile(filePath),
+  );
+  const workflowBindings = collectWorkflowBindings(sourceFile);
   const workflowDefinitions = new Map<string, string>();
   const workflowLayers = new Map<string, string>();
-  const exported = new Set<string>();
+  const exports = new Map<string, DiscoveredWorkflowExport>();
+  const reExports: Array<ReExportDeclaration> = [];
 
-  for (const match of source.matchAll(
-    /(?:export\s+)?const\s+([A-Z_a-z$][\w$]*)\s*=\s*Workflow\.make\s*\(\s*\{[\s\S]*?\bname\s*:\s*["']([^"']+)["'][\s\S]*?\}\s*\)/g,
-  )) {
-    if (match[1] && match[2]) {
-      workflowDefinitions.set(match[1], match[2]);
-    }
-  }
+  for (const statement of sourceFile.statements) {
+    if (ts.isVariableStatement(statement)) {
+      const exported = hasExportModifier(statement);
+      for (const declaration of statement.declarationList.declarations) {
+        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
+          continue;
+        }
 
-  for (const match of source.matchAll(
-    /export\s+const\s+([A-Z_a-z$][\w$]*)\s*=\s*Workflow\.make\s*\(\s*\{[\s\S]*?\bname\s*:\s*["']([^"']+)["'][\s\S]*?\}\s*\)\.toLayer\s*\(/g,
-  )) {
-    if (match[1] && match[2]) {
-      workflowLayers.set(match[1], match[2]);
-      exported.add(match[1]);
-    }
-  }
+        const name = declaration.name.text;
+        const workflowName = workflowNameFromMakeCall(declaration.initializer, workflowBindings);
+        if (workflowName) {
+          workflowDefinitions.set(name, workflowName);
+          continue;
+        }
 
-  for (const match of source.matchAll(
-    /(export\s+)?const\s+([A-Z_a-z$][\w$]*)\s*=\s*([A-Z_a-z$][\w$]*)\.toLayer\s*\(/g,
-  )) {
-    const exportKeyword = match[1];
-    const layerName = match[2];
-    const workflowVariable = match[3];
-    const workflowName = workflowVariable ? workflowDefinitions.get(workflowVariable) : undefined;
-    if (layerName && workflowName) {
-      workflowLayers.set(layerName, workflowName);
-      if (exportKeyword) {
-        exported.add(layerName);
+        const layerWorkflowName = workflowNameFromLayerExpression(
+          declaration.initializer,
+          workflowBindings,
+          workflowDefinitions,
+        );
+        if (!layerWorkflowName) {
+          continue;
+        }
+
+        workflowLayers.set(name, layerWorkflowName);
+        if (exported) {
+          exports.set(name, discoveredWorkflow(layerWorkflowName, filePath, name));
+        }
       }
+      continue;
     }
-  }
 
-  for (const match of source.matchAll(/export\s*\{([\s\S]*?)\}/g)) {
-    for (const exportEntry of parseExportSpecifiers(match[1] ?? "")) {
+    if (!ts.isExportDeclaration(statement)) {
+      continue;
+    }
+
+    const specifier = moduleSpecifierText(statement.moduleSpecifier);
+    if (specifier) {
+      const exportClause = statement.exportClause;
+      if (!exportClause) {
+        reExports.push({ kind: "all", specifier });
+      } else if (ts.isNamedExports(exportClause)) {
+        const namedExports = exportSpecifierNames(statement, exportClause);
+        if (namedExports.length > 0) {
+          reExports.push({ kind: "named", specifier, exports: namedExports });
+        }
+      }
+      continue;
+    }
+
+    if (
+      statement.isTypeOnly ||
+      !statement.exportClause ||
+      !ts.isNamedExports(statement.exportClause)
+    ) {
+      continue;
+    }
+
+    for (const exportEntry of exportSpecifierNames(statement, statement.exportClause)) {
       const workflowName = workflowLayers.get(exportEntry.imported);
       if (workflowName) {
-        workflowLayers.set(exportEntry.exported, workflowName);
-        exported.add(exportEntry.exported);
+        exports.set(
+          exportEntry.exported,
+          discoveredWorkflow(workflowName, filePath, exportEntry.exported),
+        );
       }
     }
   }
 
-  return new Map([...workflowLayers].filter(([name]) => exported.has(name)));
+  return { exports, reExports };
 }
 
-function parseExportSpecifiers(specifiers: string): Array<{ imported: string; exported: string }> {
-  return specifiers
-    .split(",")
-    .map((specifier) => specifier.trim())
-    .filter(Boolean)
-    .map((specifier) => {
-      const [imported, exported] = specifier.split(/\s+as\s+/);
-      const name = imported?.trim() ?? "";
-      return { imported: name, exported: exported?.trim() ?? name };
-    })
-    .filter(
-      (specifier) => isIdentifierName(specifier.imported) && isIdentifierName(specifier.exported),
-    );
+function collectWorkflowBindings(sourceFile: ts.SourceFile): {
+  readonly names: Set<string>;
+  readonly namespaces: Set<string>;
+} {
+  const names = new Set(["Workflow"]);
+  const namespaces = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      moduleSpecifierText(statement.moduleSpecifier) !== "sideffect"
+    ) {
+      continue;
+    }
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings) {
+      continue;
+    }
+
+    if (ts.isNamespaceImport(namedBindings)) {
+      namespaces.add(namedBindings.name.text);
+      continue;
+    }
+
+    for (const element of namedBindings.elements) {
+      const imported = element.propertyName?.text ?? element.name.text;
+      if (imported === "Workflow") {
+        names.add(element.name.text);
+      }
+    }
+  }
+
+  return { names, namespaces };
+}
+
+function workflowNameFromLayerExpression(
+  expression: ts.Expression,
+  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
+  workflowDefinitions: Map<string, string>,
+): string | undefined {
+  const call = skipOuterExpressions(expression);
+  if (!ts.isCallExpression(call)) {
+    return;
+  }
+
+  const callee = skipOuterExpressions(call.expression);
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "toLayer") {
+    return;
+  }
+
+  const receiver = skipOuterExpressions(callee.expression);
+  if (ts.isIdentifier(receiver)) {
+    return workflowDefinitions.get(receiver.text);
+  }
+
+  return workflowNameFromMakeCall(receiver, workflowBindings);
+}
+
+function workflowNameFromMakeCall(
+  expression: ts.Expression,
+  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
+): string | undefined {
+  const call = skipOuterExpressions(expression);
+  if (!ts.isCallExpression(call) || !isWorkflowMakeCallee(call.expression, workflowBindings)) {
+    return;
+  }
+
+  const options = call.arguments[0];
+  if (!options) {
+    return;
+  }
+
+  const object = skipOuterExpressions(options);
+  if (!ts.isObjectLiteralExpression(object)) {
+    return;
+  }
+
+  for (const property of object.properties) {
+    if (!ts.isPropertyAssignment(property) || !propertyNameEquals(property.name, "name")) {
+      continue;
+    }
+
+    return staticStringValue(property.initializer);
+  }
+}
+
+function isWorkflowMakeCallee(
+  expression: ts.Expression,
+  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
+): boolean {
+  const callee = skipOuterExpressions(expression);
+  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "make") {
+    return false;
+  }
+
+  const receiver = skipOuterExpressions(callee.expression);
+  if (ts.isIdentifier(receiver)) {
+    return workflowBindings.names.has(receiver.text);
+  }
+
+  return (
+    ts.isPropertyAccessExpression(receiver) &&
+    receiver.name.text === "Workflow" &&
+    ts.isIdentifier(receiver.expression) &&
+    workflowBindings.namespaces.has(receiver.expression.text)
+  );
+}
+
+function exportSpecifierNames(
+  declaration: ts.ExportDeclaration,
+  exports: ts.NamedExports,
+): Array<{ readonly imported: string; readonly exported: string }> {
+  if (declaration.isTypeOnly) {
+    return [];
+  }
+
+  return exports.elements.flatMap((element) => {
+    if (element.isTypeOnly) {
+      return [];
+    }
+
+    const imported = moduleExportNameText(element.propertyName ?? element.name);
+    const exported = moduleExportNameText(element.name);
+    return imported && exported ? [{ imported, exported }] : [];
+  });
+}
+
+function discoveredWorkflow(
+  workflowName: string,
+  filePath: string,
+  exportName: string,
+): DiscoveredWorkflowExport {
+  return { workflowName, modulePath: filePath, exportName };
+}
+
+function hasExportModifier(node: { readonly modifiers?: ts.NodeArray<ts.ModifierLike> }): boolean {
+  return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ?? false;
+}
+
+function moduleSpecifierText(moduleSpecifier: ts.Expression | undefined): string | undefined {
+  return moduleSpecifier && ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : undefined;
+}
+
+function moduleExportNameText(name: ts.ModuleExportName): string | undefined {
+  return ts.isIdentifier(name) && isIdentifierName(name.text) ? name.text : undefined;
+}
+
+function propertyNameEquals(name: ts.PropertyName, expected: string): boolean {
+  return (
+    (ts.isIdentifier(name) && name.text === expected) ||
+    (ts.isStringLiteral(name) && name.text === expected)
+  );
+}
+
+function staticStringValue(expression: ts.Expression): string | undefined {
+  const value = skipOuterExpressions(expression);
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return value.text;
+  }
+}
+
+function skipOuterExpressions(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isSatisfiesExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function scriptKindForFile(path: string): ts.ScriptKind {
+  switch (extname(path)) {
+    case ".tsx":
+      return ts.ScriptKind.TSX;
+    case ".jsx":
+      return ts.ScriptKind.JSX;
+    case ".js":
+    case ".mjs":
+    case ".cjs":
+      return ts.ScriptKind.JS;
+    case ".ts":
+    case ".mts":
+    case ".cts":
+      return ts.ScriptKind.TS;
+    default:
+      return ts.ScriptKind.Unknown;
+  }
 }
 
 function capturedWorkflow(
