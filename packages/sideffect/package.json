@@ -1,16 +1,16 @@
 {
   "name": "sideffect",
-  "version": "0.1.0",
-  "description": "An Effect V4 wrapper for Cloudflare Workflows.",
+  "version": "0.2.0",
+  "description": "Build Cloudflare Workflows from reusable typed steps, with Vite-generated workflow config.",
   "homepage": "https://github.com/eersnington/sideeffect#readme",
   "bugs": {
-    "url": "https://github.com/eersnington/sideeffect/issues"
+    "url": "https://github.com/eersnington/sideffect/issues"
   },
   "license": "Apache-2.0",
   "author": "Eersnington",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/eersnington/sideeffect.git"
+    "url": "git+https://github.com/eersnington/sideffect.git"
   },
   "files": [
     "dist"
