@@ -587,6 +587,35 @@ test("withCloudflareWorkflows wraps the Cloudflare plugin factory", () => {
   expect(plugins[1]).toMatchObject({ name: "cloudflare" });
 });
 
+test("withCloudflareWorkflows accepts forwarded Cloudflare plugin options", () => {
+  const plugins = withCloudflareWorkflows((config) => ({ name: "cloudflare", config }), {
+    assetsOnly: false,
+    auxiliaryWorkers: [{ configPath: "./auxiliary/wrangler.jsonc", devOnly: false }],
+    experimental: {
+      headersAndRedirectsDevModeSupport: true,
+      newConfig: { types: { generate: false } },
+      prerenderWorker: { configPath: "./prerender/wrangler.jsonc" },
+    },
+    inspectorPort: 9229,
+    persistState: true,
+    remoteBindings: false,
+    tunnel: { autoStart: true, name: "sideffect-dev" },
+    viteEnvironment: { name: "worker", childEnvironments: ["client"] },
+  });
+
+  expect(plugins[1]).toMatchObject({
+    config: expect.objectContaining({
+      assetsOnly: false,
+      auxiliaryWorkers: [{ configPath: "./auxiliary/wrangler.jsonc", devOnly: false }],
+      inspectorPort: 9229,
+      persistState: true,
+      remoteBindings: false,
+      tunnel: { autoStart: true, name: "sideffect-dev" },
+      viteEnvironment: { name: "worker", childEnvironments: ["client"] },
+    }),
+  });
+});
+
 test("Sideffect workflows plugin captures native config and points Cloudflare at virtual entry", () => {
   const plugin = createSideffectWorkflowsPlugin({
     config: () => ({ name: "app" }),

@@ -32,11 +32,69 @@ export type WorkerConfigCustomizer =
   | Partial<WorkerConfig>
   | ((config: WorkerConfig, ...args: Array<any>) => Partial<WorkerConfig> | void);
 
+type CloudflareDevOnly = boolean | (() => boolean);
+
+type CloudflarePersistState = boolean | { readonly path: string };
+
+interface CloudflareViteEnvironmentConfig {
+  readonly name?: string;
+  readonly childEnvironments?: Array<string>;
+}
+
+interface CloudflareTunnelConfig {
+  readonly autoStart?: boolean;
+  readonly name?: string;
+}
+
+type CloudflareAuxiliaryWorkerConfig =
+  | {
+      readonly configPath: string;
+      readonly config?: WorkerConfigCustomizer;
+      readonly devOnly?: CloudflareDevOnly;
+      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+    }
+  | {
+      readonly configPath?: string;
+      readonly config: WorkerConfigCustomizer;
+      readonly devOnly?: CloudflareDevOnly;
+      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+    };
+
+type CloudflarePrerenderWorkerConfig =
+  | {
+      readonly configPath: string;
+      readonly config?: WorkerConfigCustomizer;
+      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+    }
+  | {
+      readonly configPath?: string;
+      readonly config: WorkerConfigCustomizer;
+      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+    };
+
+interface CloudflareExperimentalConfig {
+  readonly headersAndRedirectsDevModeSupport?: boolean;
+  readonly prerenderWorker?: CloudflarePrerenderWorkerConfig;
+  readonly newConfig?:
+    | boolean
+    | {
+        readonly types?: {
+          readonly generate?: boolean;
+        };
+      };
+}
+
 export interface CloudflarePluginConfig {
   readonly config?: WorkerConfigCustomizer;
   readonly configPath?: string;
-  readonly auxiliaryWorkers?: Array<unknown>;
-  readonly viteEnvironment?: unknown;
+  readonly assetsOnly?: CloudflareDevOnly;
+  readonly auxiliaryWorkers?: Array<CloudflareAuxiliaryWorkerConfig>;
+  readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+  readonly persistState?: CloudflarePersistState;
+  readonly inspectorPort?: number | false;
+  readonly remoteBindings?: boolean;
+  readonly tunnel?: boolean | CloudflareTunnelConfig;
+  readonly experimental?: CloudflareExperimentalConfig;
 }
 
 export type WorkflowDiscoveryPaths = Array<string>;
