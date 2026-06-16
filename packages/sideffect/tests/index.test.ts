@@ -22,6 +22,7 @@ import {
 } from "../src/vite.ts";
 import type { NativeWorkflowStep, WorkflowEntrypointConstructor } from "../src/types.ts";
 import type { SideffectWorkflowsPlugin } from "../src/vite.ts";
+import type { WorkflowStepContext } from "cloudflare:workers";
 
 class MissingImage extends TaggedError("MissingImage")<{
   readonly imageId: string;
@@ -55,9 +56,13 @@ function fakeNativeStep(calls: Array<unknown> = []): NativeWorkflowStep {
   return {
     async do(...args: Array<unknown>) {
       const callbackIndex = args.findIndex((arg) => typeof arg === "function");
-      const callback = args[callbackIndex] as () => Promise<unknown>;
+      const callback = args[callbackIndex] as (ctx: WorkflowStepContext) => Promise<unknown>;
       calls.push(args.filter((_, index) => index !== callbackIndex));
-      return callback();
+      return callback({
+        step: { name: args[0] as string, count: 1 },
+        attempt: 1,
+        config: (callbackIndex === 2 ? args[1] : {}) as WorkflowStepContext["config"],
+      });
     },
     async sleep(name, duration) {
       calls.push(["sleep", name, duration]);
@@ -148,6 +153,55 @@ test("workflow engine runs an async workflow through native step.do", async () =
 
   expect(result).toEqual({ id: "img_123" });
   expect(calls).toEqual([["fetch image"]]);
+});
+
+test("step run callbacks receive Cloudflare WorkflowStepContext fields", async () => {
+  const contexts: Array<unknown> = [];
+  const nativeStep = fakeNativeStep();
+  const inspectNativeContext = Step.make("inspect native context", {
+    payload: Schema.String,
+    result: Schema.Struct({
+      name: Schema.String,
+      attempt: Schema.String,
+      timeout: Schema.String,
+      workflowStep: Schema.String,
+    }),
+    run: (_payload, ctx) => {
+      contexts.push(ctx);
+
+      return {
+        name: ctx.step.name,
+        attempt: String(ctx.attempt),
+        timeout: String(ctx.config.timeout),
+        workflowStep: ctx.workflowStep === nativeStep ? "same" : "different",
+      };
+    },
+  });
+  const layer = imageWorkflow.toLayer(async (_workflow, step) => {
+    return step.do(inspectNativeContext, "payload", { timeout: "5 minutes" });
+  });
+
+  const result = await WorkflowEngine.run(layer, {
+    env: {},
+    ctx: {},
+    event: { payload: { imageId: "img_123" } },
+    step: nativeStep,
+  });
+
+  expect(result).toEqual({
+    name: "inspect native context",
+    attempt: "1",
+    timeout: "5 minutes",
+    workflowStep: "same",
+  });
+  expect(contexts).toEqual([
+    expect.objectContaining({
+      step: { name: "inspect native context", count: 1 },
+      attempt: 1,
+      config: { timeout: "5 minutes" },
+      workflowStep: nativeStep,
+    }),
+  ]);
 });
 
 test("workflow engine preserves tagged errors from async steps", async () => {

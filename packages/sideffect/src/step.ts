@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { WorkflowStepRollbackOptions } from "cloudflare:workers";
+import type { WorkflowStepContext, WorkflowStepRollbackOptions } from "cloudflare:workers";
 
 import { decodeWithSchema, runMaybeEffect } from "./runtime.ts";
 import type { RuntimeErrorOptions } from "./runtime.ts";
@@ -87,7 +87,7 @@ export function callNativeStep<A>(
   nativeStep: { do: (...args: Array<any>) => Promise<A> },
   name: string,
   options: StepOptions | undefined,
-  callback: () => Promise<A>,
+  callback: (ctx: WorkflowStepContext) => Promise<A>,
   rollbackOptions?: WorkflowStepRollbackOptions<A>,
 ): Promise<A> {
   if (options === undefined) {

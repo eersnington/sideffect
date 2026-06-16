@@ -3,6 +3,7 @@ import type {
   WorkflowEvent as CloudflareWorkflowEvent,
   WorkflowRollbackContext,
   WorkflowStepConfig,
+  WorkflowStepContext,
   WorkflowStepEvent,
   WorkflowStepRollbackOptions,
 } from "cloudflare:workers";
@@ -24,10 +25,15 @@ export interface WorkflowContext<Payload> {
   readonly ctx: unknown;
 }
 
-export interface StepContext {
+export interface StepContext extends WorkflowStepContext {
+  /** Worker environment/bindings from the WorkflowEntrypoint instance. */
   readonly env: unknown;
+
+  /** Worker execution context from the WorkflowEntrypoint instance. */
   readonly ctx: unknown;
-  readonly step: NativeWorkflowStep;
+
+  /** Raw Cloudflare WorkflowStep API object for advanced native operations. */
+  readonly workflowStep: NativeWorkflowStep;
 }
 
 export interface StepOptions {
@@ -37,17 +43,21 @@ export interface StepOptions {
 }
 
 export interface NativeWorkflowStep {
-  do<A>(name: string, callback: () => Promise<A> | A): Promise<A>;
+  do<A>(name: string, callback: (context: WorkflowStepContext) => Promise<A> | A): Promise<A>;
   do<A>(
     name: string,
-    callback: () => Promise<A> | A,
+    callback: (context: WorkflowStepContext) => Promise<A> | A,
     rollbackOptions: WorkflowStepRollbackOptions<A>,
   ): Promise<A>;
-  do<A>(name: string, config: StepOptions, callback: () => Promise<A> | A): Promise<A>;
   do<A>(
     name: string,
     config: StepOptions,
-    callback: () => Promise<A> | A,
+    callback: (context: WorkflowStepContext) => Promise<A> | A,
+  ): Promise<A>;
+  do<A>(
+    name: string,
+    config: StepOptions,
+    callback: (context: WorkflowStepContext) => Promise<A> | A,
     rollbackOptions: WorkflowStepRollbackOptions<A>,
   ): Promise<A>;
   sleep(name: string, duration: string | number): Promise<void>;
@@ -89,7 +99,16 @@ export type StepPayload<S> = S extends StepDefinition<infer Payload, any> ? Payl
 
 export type StepResult<S> = S extends StepDefinition<any, infer Result> ? Result : never;
 
-export interface RollbackContext<Payload, Result> extends StepContext {
+export interface RollbackContext<Payload, Result> {
+  /** Worker environment/bindings from the WorkflowEntrypoint instance. */
+  readonly env: unknown;
+
+  /** Worker execution context from the WorkflowEntrypoint instance. */
+  readonly ctx: unknown;
+
+  /** Raw Cloudflare WorkflowStep API object for advanced native operations. */
+  readonly workflowStep: NativeWorkflowStep;
+
   readonly payload: Payload;
   readonly result: Result | undefined;
   readonly failure: unknown;

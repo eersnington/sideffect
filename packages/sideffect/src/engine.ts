@@ -113,14 +113,15 @@ function makeSideffectStep(options: EngineRunOptions): SideffectStep {
         options.step,
         step.name,
         stepOptions,
-        () =>
+        (ctx) =>
           runStepDefinition(
             step,
             payload,
             {
+              ...ctx,
               env: options.env,
               ctx: options.ctx,
-              step: options.step,
+              workflowStep: options.step,
             },
             {
               NonRetryableError: options.NonRetryableError,
@@ -163,7 +164,7 @@ function makeRollbackOptions(
         rollback(native.output, {
           env: options.env,
           ctx: options.ctx,
-          step: options.step,
+          workflowStep: options.step,
           payload,
           result: native.output,
           failure: native.error,

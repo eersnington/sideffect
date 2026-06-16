@@ -6,7 +6,9 @@ export { Step } from "./step.ts";
 export { Workflow } from "./workflow.ts";
 export type {
   NativeWorkflowStep,
+  RollbackContext,
   SideffectStep,
+  StepContext,
   StepDefinition,
   StepOptions,
   WorkflowBindingDescriptor,
