@@ -11,13 +11,33 @@ import type {
   StepResult,
 } from "./types.ts";
 
+/** Options for creating a reusable Sideffect step definition. */
 export interface StepMakeOptions<Payload, Result> {
+  /** Schema used to decode the step payload before `run` executes. */
   readonly payload: Schema.Schema<Payload>;
+  /** Schema used to decode the step result before it leaves the step. */
   readonly result: Schema.Schema<Result>;
+  /** User function that performs the step work. */
   readonly run: StepDefinition<Payload, Result>["run"];
 }
 
+/** Helpers for defining reusable typed workflow steps. */
 export const Step = {
+  /**
+   * Creates a reusable typed step definition.
+   *
+   * Sideffect decodes the payload before `run` executes and decodes the result
+   * before returning it to the workflow.
+   *
+   * @example
+   * ```ts
+   * const fetchImage = Step.make("fetch image", {
+   *   payload: Schema.Struct({ imageId: Schema.String }),
+   *   result: Schema.Struct({ id: Schema.String }),
+   *   run: async ({ imageId }) => ({ id: imageId }),
+   * });
+   * ```
+   */
   make<Payload, Result>(
     name: string,
     options: StepMakeOptions<Payload, Result>,
@@ -31,6 +51,7 @@ export const Step = {
   },
 };
 
+/** @internal Creates the immutable step definition object used by public helpers. */
 export function makeStepDefinition<Payload, Result>(options: {
   readonly name: string;
   readonly payloadSchema: Schema.Schema<Payload>;
@@ -53,6 +74,7 @@ export function makeStepDefinition<Payload, Result>(options: {
   };
 }
 
+/** @internal Decodes a step payload and turns schema failures into workflow errors. */
 export function decodeStepPayload<S extends StepDefinition<any, any>>(
   step: S,
   payload: StepPayload<S>,
@@ -66,6 +88,7 @@ export function decodeStepPayload<S extends StepDefinition<any, any>>(
   ) as StepPayload<S>;
 }
 
+/** @internal Runs a step definition and validates both input and output schemas. */
 export async function runStepDefinition<S extends StepDefinition<any, any>>(
   step: S,
   payload: StepPayload<S>,
@@ -83,6 +106,13 @@ export async function runStepDefinition<S extends StepDefinition<any, any>>(
   ) as StepResult<S>;
 }
 
+/**
+ * @internal Selects the correct Cloudflare `step.do(...)` overload.
+ *
+ * Cloudflare supports configured/unconfigured steps and optional rollback
+ * options. Keeping the overload routing here prevents the workflow engine from
+ * duplicating that branching logic.
+ */
 export function callNativeStep<A>(
   nativeStep: { do: (...args: Array<any>) => Promise<A> },
   name: string,

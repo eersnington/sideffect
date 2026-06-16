@@ -21,91 +21,196 @@ const sourceFileExtensions = new Set([
 ]);
 const declarationFileExtensions = [".d.ts", ".d.mts", ".d.cts"];
 
+/** Worker configuration shape passed through Cloudflare's Vite plugin `config` hook. */
 export interface WorkerConfig {
+  /** Worker entry module from Wrangler or a Cloudflare config customizer. */
   readonly main?: string;
+  /** Worker name used when deriving generated workflow entrypoint imports. */
   readonly name?: string;
+  /** Cloudflare Workflow bindings configured for the Worker. */
   readonly workflows?: Array<WorkflowConfigEntry>;
   readonly [key: string]: unknown;
 }
 
+/**
+ * Cloudflare Worker config customizer accepted by Sideffect's wrapper.
+ *
+ * The callback form may mutate `config` in place or return a partial config to
+ * merge, matching Cloudflare's Vite plugin behavior for the entry Worker.
+ */
 export type WorkerConfigCustomizer =
   | Partial<WorkerConfig>
   | ((config: WorkerConfig, ...args: Array<any>) => Partial<WorkerConfig> | void);
 
+/** @internal Local mirror of Cloudflare's lazy dev-only option. */
 type CloudflareDevOnly = boolean | (() => boolean);
 
+/** @internal Local mirror of Cloudflare's `persistState` option. */
 type CloudflarePersistState = boolean | { readonly path: string };
 
+/** @internal Local mirror of Cloudflare's Vite environment config option. */
 interface CloudflareViteEnvironmentConfig {
+  /** Vite environment name for this Worker. */
   readonly name?: string;
+  /** Child Vite environments that should be associated with this Worker. */
   readonly childEnvironments?: Array<string>;
 }
 
+/** @internal Local mirror of Cloudflare's tunnel config option. */
 interface CloudflareTunnelConfig {
+  /** Start the tunnel automatically during dev or preview. */
   readonly autoStart?: boolean;
+  /** Named Cloudflare Tunnel to use instead of a quick tunnel. */
   readonly name?: string;
 }
 
-type CloudflareAuxiliaryWorkerConfig =
-  | {
-      readonly configPath: string;
-      readonly config?: WorkerConfigCustomizer;
-      readonly devOnly?: CloudflareDevOnly;
-      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
-    }
-  | {
-      readonly configPath?: string;
-      readonly config: WorkerConfigCustomizer;
-      readonly devOnly?: CloudflareDevOnly;
-      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
-    };
-
-type CloudflarePrerenderWorkerConfig =
-  | {
-      readonly configPath: string;
-      readonly config?: WorkerConfigCustomizer;
-      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
-    }
-  | {
-      readonly configPath?: string;
-      readonly config: WorkerConfigCustomizer;
-      readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
-    };
-
-interface CloudflareExperimentalConfig {
-  readonly headersAndRedirectsDevModeSupport?: boolean;
-  readonly prerenderWorker?: CloudflarePrerenderWorkerConfig;
-  readonly newConfig?:
-    | boolean
-    | {
-        readonly types?: {
-          readonly generate?: boolean;
-        };
-      };
+/**
+ * @internal Local mirror of Cloudflare file-based auxiliary Worker options.
+ *
+ * Keep this structural so `sideffect/vite` declarations do not import
+ * `@cloudflare/vite-plugin` or its Wrangler/Miniflare transitive types.
+ */
+interface CloudflareAuxiliaryWorkerFileConfig {
+  /** Path to the auxiliary Worker's Wrangler config file. */
+  readonly configPath: string;
+  /** Optional config customizer applied after loading the config file. */
+  readonly config?: WorkerConfigCustomizer;
+  /** Whether this auxiliary Worker should be omitted from production builds. */
+  readonly devOnly?: CloudflareDevOnly;
+  /** Vite environment settings for this auxiliary Worker. */
+  readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
 }
 
-export interface CloudflarePluginConfig {
-  readonly config?: WorkerConfigCustomizer;
+/** @internal Local mirror of Cloudflare inline auxiliary Worker options. */
+interface CloudflareAuxiliaryWorkerInlineConfig {
+  /** Optional path to the auxiliary Worker's Wrangler config file. */
   readonly configPath?: string;
-  readonly assetsOnly?: CloudflareDevOnly;
-  readonly auxiliaryWorkers?: Array<CloudflareAuxiliaryWorkerConfig>;
+  /** Inline config customizer for the auxiliary Worker. */
+  readonly config: WorkerConfigCustomizer;
+  /** Whether this auxiliary Worker should be omitted from production builds. */
+  readonly devOnly?: CloudflareDevOnly;
+  /** Vite environment settings for this auxiliary Worker. */
   readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+}
+
+/** @internal Local mirror of Cloudflare auxiliary Worker options. */
+type CloudflareAuxiliaryWorkerConfig =
+  | CloudflareAuxiliaryWorkerFileConfig
+  | CloudflareAuxiliaryWorkerInlineConfig;
+
+/**
+ * @internal Local mirror of Cloudflare file-based prerender Worker options.
+ *
+ * This exists only for the forwarded `experimental.prerenderWorker` option.
+ */
+interface CloudflarePrerenderWorkerFileConfig {
+  /** Path to the prerender Worker's Wrangler config file. */
+  readonly configPath: string;
+  /** Optional config customizer applied after loading the config file. */
+  readonly config?: WorkerConfigCustomizer;
+  /** Vite environment settings for the prerender Worker. */
+  readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+}
+
+/** @internal Local mirror of Cloudflare inline prerender Worker options. */
+interface CloudflarePrerenderWorkerInlineConfig {
+  /** Optional path to the prerender Worker's Wrangler config file. */
+  readonly configPath?: string;
+  /** Inline config customizer for the prerender Worker. */
+  readonly config: WorkerConfigCustomizer;
+  /** Vite environment settings for the prerender Worker. */
+  readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+}
+
+/** @internal Local mirror of Cloudflare prerender Worker options. */
+type CloudflarePrerenderWorkerConfig =
+  | CloudflarePrerenderWorkerFileConfig
+  | CloudflarePrerenderWorkerInlineConfig;
+
+/** @internal Local mirror of Cloudflare generated type options for `newConfig`. */
+interface CloudflareNewConfigTypesOptions {
+  /** Whether Cloudflare should generate Worker configuration types. */
+  readonly generate?: boolean;
+}
+
+/** @internal Local mirror of Cloudflare's `experimental.newConfig` object form. */
+interface CloudflareNewConfigOptions {
+  /** Options for Cloudflare's generated Worker configuration types. */
+  readonly types?: CloudflareNewConfigTypesOptions;
+}
+
+/**
+ * @internal Local mirror of Cloudflare experimental plugin options.
+ *
+ * Keep this structural so `sideffect/vite` declarations do not import
+ * `@cloudflare/vite-plugin` or its Wrangler/Miniflare transitive types.
+ */
+interface CloudflareExperimentalConfig {
+  /** Enables Cloudflare's development-mode support for `_headers` and `_redirects`. */
+  readonly headersAndRedirectsDevModeSupport?: boolean;
+  /** Configures Cloudflare's dedicated prerender Worker support. */
+  readonly prerenderWorker?: CloudflarePrerenderWorkerConfig;
+  /** Enables Cloudflare's experimental `cloudflare.config.ts` support. */
+  readonly newConfig?: boolean | CloudflareNewConfigOptions;
+}
+
+/**
+ * Cloudflare Vite plugin options accepted by Sideffect and forwarded to
+ * `@cloudflare/vite-plugin`.
+ *
+ * Sideffect mirrors the relevant option shape locally instead of importing
+ * `PluginConfig` from `@cloudflare/vite-plugin`. Cloudflare's published
+ * declaration currently imports Wrangler, Miniflare, Vite, and Cloudflare
+ * utility declarations, which would leak optional peer transitive types through
+ * `sideffect/vite`.
+ */
+export interface CloudflarePluginConfig {
+  /** Entry Worker config customizer passed to Cloudflare's Vite plugin. */
+  readonly config?: WorkerConfigCustomizer;
+  /** Path to the entry Worker's Wrangler config file. */
+  readonly configPath?: string;
+  /** Whether the entry Worker should be omitted from production builds. */
+  readonly assetsOnly?: CloudflareDevOnly;
+  /** Additional Workers to run or build alongside the entry Worker. */
+  readonly auxiliaryWorkers?: Array<CloudflareAuxiliaryWorkerConfig>;
+  /** Vite environment settings for the entry Worker. */
+  readonly viteEnvironment?: CloudflareViteEnvironmentConfig;
+  /** Miniflare persistence mode forwarded to Cloudflare's plugin. */
   readonly persistState?: CloudflarePersistState;
+  /** Inspector port for Worker debugging, or `false` to disable inspection. */
   readonly inspectorPort?: number | false;
+  /** Whether Cloudflare should use remote bindings during local development. */
   readonly remoteBindings?: boolean;
+  /** Cloudflare Tunnel sharing options for dev or preview servers. */
   readonly tunnel?: boolean | CloudflareTunnelConfig;
+  /** Experimental Cloudflare Vite plugin options forwarded unchanged. */
   readonly experimental?: CloudflareExperimentalConfig;
 }
 
+/** Workflow source paths scanned for static `Workflow.make(...).toLayer(...)` exports. */
 export type WorkflowDiscoveryPaths = Array<string>;
 
+/**
+ * Options for `withCloudflareWorkflows()`.
+ *
+ * Includes Sideffect-specific workflow discovery options plus Cloudflare Vite
+ * plugin options that are forwarded to `@cloudflare/vite-plugin`.
+ */
 export interface WithCloudflareWorkflowsOptions extends CloudflarePluginConfig {
+  /** Original Worker entry module when it cannot be read from Cloudflare config. */
   readonly worker?: string;
+  /**
+   * Workflow files or directories to scan for Sideffect workflow layers.
+   *
+   * @default ["src/workflows"]
+   */
   readonly workflowPaths?: WorkflowDiscoveryPaths;
 }
 
+/** Factory function exported by `@cloudflare/vite-plugin`. */
 export type CloudflarePluginFactory<Result = unknown> = (config?: any) => Result;
 
+/** Minimal Vite plugin shape used by Sideffect without importing Vite types. */
 export interface Plugin {
   readonly name: string;
   readonly enforce?: "pre" | "post";
@@ -116,36 +221,51 @@ export interface Plugin {
   load?(this: ResolveContext, id: string): Promise<string | void> | string | void;
 }
 
+/** @internal Cloudflare config captured during Cloudflare's Vite config hook. */
 interface CapturedWorkflowConfig {
+  /** Original user Worker entry before Sideffect replaces it with the virtual entry. */
   readonly sourceMain?: string;
+  /** Worker name used when disambiguating local workflow entries. */
   readonly workerName?: string;
+  /** Merged native and Sideffect workflow bindings. */
   readonly workflows: Array<CapturedWorkflow>;
 }
 
+/** @internal Workflow binding generated from a discovered Sideffect layer. */
 interface CapturedSideffectWorkflow {
   readonly kind: "sideffect";
   readonly config: WorkflowConfigEntry;
   readonly layer: WorkflowLayerImport;
 }
 
+/** @internal Existing native Cloudflare workflow binding preserved from config. */
 interface CapturedNativeWorkflow {
   readonly kind: "native";
   readonly config: WorkflowConfigEntry;
 }
 
+/** @internal Workflow binding tracked while generating the virtual entry module. */
 type CapturedWorkflow = CapturedSideffectWorkflow | CapturedNativeWorkflow;
 
+/** @internal Import target for a discovered Sideffect workflow layer. */
 interface WorkflowLayerImport {
+  /** Module path containing the workflow layer export. */
   readonly modulePath: string;
+  /** Named export that contains the workflow layer. */
   readonly exportName: string;
 }
 
+/** @internal Static workflow export discovered by TypeScript AST traversal. */
 interface DiscoveredWorkflowExport {
+  /** Cloudflare Workflow name from `Workflow.make({ name })`. */
   readonly workflowName: string;
+  /** Source module that exports the workflow layer. */
   readonly modulePath: string;
+  /** Named export containing the workflow layer. */
   readonly exportName: string;
 }
 
+/** @internal Local re-export shape followed by workflow discovery. */
 type ReExportDeclaration =
   | {
       readonly kind: "named";
@@ -154,11 +274,15 @@ type ReExportDeclaration =
     }
   | { readonly kind: "all"; readonly specifier: string };
 
+/** @internal Fully resolved inputs for generated `virtual:sideffect/entry`. */
 interface ResolvedVirtualEntryConfig {
+  /** Resolved import specifier for the user's original Worker entry. */
   readonly workerImport: string;
+  /** Workflow bindings to expose from the generated entry module. */
   readonly workflows: Array<CapturedWorkflow>;
 }
 
+/** @internal Minimal Vite plugin load context used to resolve the original Worker. */
 interface ResolveContext {
   resolve(
     source: string,
@@ -167,6 +291,30 @@ interface ResolveContext {
   ): Promise<{ readonly id: string } | null>;
 }
 
+/**
+ * Wraps Cloudflare's Vite plugin with Sideffect workflow discovery.
+ *
+ * Sideffect adds a pre-plugin that discovers `Workflow.make(...).toLayer(...)`
+ * exports, writes Cloudflare workflow bindings, and points Cloudflare at the
+ * generated `virtual:sideffect/entry` module. Cloudflare plugin options are
+ * forwarded unchanged.
+ *
+ * @example
+ * ```ts
+ * import { cloudflare } from "@cloudflare/vite-plugin";
+ * import { defineConfig } from "vite";
+ * import { withCloudflareWorkflows } from "sideffect/vite";
+ *
+ * export default defineConfig({
+ *   plugins: [
+ *     ...withCloudflareWorkflows(cloudflare, {
+ *       persistState: true,
+ *       inspectorPort: 9229,
+ *     }),
+ *   ],
+ * });
+ * ```
+ */
 export function withCloudflareWorkflows<Result>(
   cloudflare: CloudflarePluginFactory<Result>,
   options: WithCloudflareWorkflowsOptions = {},
@@ -175,10 +323,18 @@ export function withCloudflareWorkflows<Result>(
   return [sideffect, cloudflare(sideffect.cloudflare)];
 }
 
+/** Sideffect Vite plugin plus the Cloudflare config object it forwards. */
 export interface SideffectWorkflowsPlugin extends Plugin {
+  /** Config object passed to `@cloudflare/vite-plugin` by `withCloudflareWorkflows()`. */
   readonly cloudflare: CloudflarePluginConfig;
 }
 
+/**
+ * Creates the Sideffect workflow discovery plugin without invoking Cloudflare's plugin factory.
+ *
+ * Use `withCloudflareWorkflows()` for normal Vite config. This lower-level
+ * helper is useful for tests and custom plugin composition.
+ */
 export function createSideffectWorkflowsPlugin(
   options: WithCloudflareWorkflowsOptions = {},
 ): SideffectWorkflowsPlugin {
@@ -275,6 +431,13 @@ export function createSideffectWorkflowsPlugin(
   return plugin;
 }
 
+/**
+ * Discovers static Sideffect workflow layer exports under the configured paths.
+ *
+ * The collector follows local barrel re-exports and recognizes static
+ * `Workflow.make({ name }).toLayer(...)` forms. Dynamic workflow names and
+ * arbitrary runtime value tracing are intentionally left to explicit config.
+ */
 export function collectWorkflowEntries(
   patterns: WorkflowDiscoveryPaths | string = ["src/workflows"],
   baseDirectory: string = process.cwd(),

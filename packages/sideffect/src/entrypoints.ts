@@ -6,11 +6,15 @@ import type {
   WorkflowLayerEntries,
 } from "./types.ts";
 
+/** @internal Dependencies needed to create native Cloudflare workflow entrypoints. */
 export interface WorkflowEntrypointsOptions {
+  /** Cloudflare `WorkflowEntrypoint` constructor. */
   readonly WorkflowEntrypoint: WorkflowEntrypointConstructor;
+  /** Optional Cloudflare native `NonRetryableError` constructor. */
   readonly NonRetryableError?: NonRetryableErrorConstructor;
 }
 
+/** @internal Creates one Cloudflare workflow entrypoint class per named layer. */
 export function makeWorkflowEntrypoints<const Entries extends WorkflowLayerEntries>(
   entries: Entries,
   options: WorkflowEntrypointsOptions,
@@ -28,6 +32,7 @@ export function makeWorkflowEntrypoints<const Entries extends WorkflowLayerEntri
   return result as { readonly [K in keyof Entries]: WorkflowEntrypointConstructor };
 }
 
+/** @internal Ensures a workflow class name can be emitted as a JavaScript export. */
 export function validateWorkflowExportName(className: string): void {
   if (!isIdentifierName(className)) {
     throw new TypeError(
@@ -36,6 +41,7 @@ export function validateWorkflowExportName(className: string): void {
   }
 }
 
+/** @internal Validates that a Worker export is a Sideffect workflow layer. */
 export function validateWorkflowLayer(
   layer: unknown,
   className: string,
@@ -47,6 +53,7 @@ export function validateWorkflowLayer(
   }
 }
 
+/** @internal Runtime predicate for Sideffect workflow layers. */
 export function isWorkflowLayer(value: unknown): value is WorkflowLayerAny {
   return (
     typeof value === "object" &&
