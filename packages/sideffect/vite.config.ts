@@ -8,6 +8,7 @@ export default defineConfig({
     entry: ["src/index.ts", "src/cloudflare.ts", "src/vite.ts"],
     deps: {
       neverBundle: ["cloudflare:workers", "cloudflare:workflows"],
+      onlyBundle: ["defu"],
     },
     dts: {
       tsgo: true,
