@@ -147,14 +147,6 @@ export type WorkflowEntrypointConstructor = new (...args: Array<any>) => {
 
 export type CloudflareWorkflowEventAny = Readonly<CloudflareWorkflowEvent<unknown>>;
 
-export interface WorkflowBindingDescriptor {
-  readonly module: string;
-  readonly export: string;
-  readonly className?: string;
-}
-
-export type WorkflowBindingDescriptors = Record<string, WorkflowBindingDescriptor>;
-
 export interface WorkflowConfigEntry {
   readonly binding: string;
   readonly name: string;

@@ -39,13 +39,6 @@ export interface CloudflarePluginConfig {
   readonly viteEnvironment?: unknown;
 }
 
-export interface WorkflowBindingDescriptor {
-  readonly module: string;
-  readonly export: string;
-  readonly className?: string;
-}
-
-export type WorkflowBindingDescriptors = Record<string, WorkflowBindingDescriptor>;
 export type WorkflowDiscoveryPaths = Array<string>;
 
 export interface WithCloudflareWorkflowsOptions extends CloudflarePluginConfig {
@@ -222,16 +215,6 @@ export function createSideffectWorkflowsPlugin(
   };
 
   return plugin;
-}
-
-export function workflowConfigEntries(
-  workflows: WorkflowBindingDescriptors,
-): Array<WorkflowConfigEntry> {
-  return Object.entries(workflows).map(([binding, descriptor]) => ({
-    binding,
-    name: descriptorName(descriptor.module),
-    class_name: descriptor.className ?? binding,
-  }));
 }
 
 export function collectWorkflowEntries(
@@ -417,19 +400,6 @@ function relativeTypeImport(root: string, modulePath: string): string {
     .replace(/\.[cm]?[jt]sx?$/, "");
 
   return path.startsWith(".") ? path : `./${path}`;
-}
-
-function descriptorName(modulePath: string): string {
-  const baseName = modulePath
-    .split("/")
-    .at(-1)
-    ?.replace(/\.[cm]?[jt]sx?$/, "");
-
-  if (!baseName) {
-    throw new Error(`Could not infer a Cloudflare workflow name from module path "${modulePath}".`);
-  }
-
-  return baseName;
 }
 
 function collectWorkflowEntriesFromPath(

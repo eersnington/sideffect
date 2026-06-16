@@ -11,8 +11,6 @@ export type {
   StepContext,
   StepDefinition,
   StepOptions,
-  WorkflowBindingDescriptor,
-  WorkflowBindingDescriptors,
   WorkflowConfigEntry,
   WorkflowContext,
   WorkflowDefinition,

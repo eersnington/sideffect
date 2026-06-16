@@ -17,7 +17,6 @@ import { makeWorkflowEntrypoints } from "../src/entrypoints.ts";
 import {
   collectWorkflowEntries,
   createSideffectWorkflowsPlugin,
-  workflowConfigEntries,
   withCloudflareWorkflows,
 } from "../src/vite.ts";
 import type {
@@ -1128,15 +1127,4 @@ test("Sideffect workflows plugin reports invalid virtual entry configuration", a
       },
     }),
   ).rejects.toThrow(/could not resolve/);
-});
-
-test("workflowConfigEntries derives native Cloudflare workflow config", () => {
-  expect(
-    workflowConfigEntries({
-      ResizeImage: {
-        module: "./src/resize-image.ts",
-        export: "resizeImageWorkflowLayer",
-      },
-    }),
-  ).toEqual([{ binding: "ResizeImage", name: "resize-image", class_name: "ResizeImage" }]);
 });
