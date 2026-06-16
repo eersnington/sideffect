@@ -19,7 +19,7 @@ import type { WorkflowRollbackContext, WorkflowStepRollbackOptions } from "cloud
 interface EngineRunOptions {
   readonly env: unknown;
   readonly ctx: unknown;
-  readonly event: WorkflowEvent<unknown>;
+  readonly event: CloudflareWorkflowEventAny;
   readonly step: NativeWorkflowStep;
   readonly NonRetryableError?: NonRetryableErrorConstructor;
 }
@@ -58,7 +58,7 @@ export const WorkflowEngine = {
           return WorkflowEngine.run(layer, {
             env: (this as { env?: unknown }).env,
             ctx: (this as { ctx?: unknown }).ctx,
-            event: event as WorkflowEvent<unknown>,
+            event,
             step,
             NonRetryableError: makeOptions.NonRetryableError,
           });
@@ -69,6 +69,7 @@ export const WorkflowEngine = {
 
   async run<Result>(layer: WorkflowLayerAny, options: EngineRunOptions): Promise<Result> {
     const payload = decodeWorkflowPayload(layer, options.event.payload, options);
+    const event = { ...options.event, payload } as WorkflowEvent<unknown>;
     const sideffectStep = makeSideffectStep(options);
 
     try {
@@ -76,7 +77,7 @@ export const WorkflowEngine = {
         layer.run(
           {
             payload,
-            event: options.event,
+            event,
             env: options.env,
             ctx: options.ctx,
           },

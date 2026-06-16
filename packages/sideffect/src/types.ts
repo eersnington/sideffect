@@ -12,11 +12,9 @@ export type MaybeEffect<A> = A | Promise<A> | Effect.Effect<A, unknown, never>;
 
 export type SchemaType<S> = S extends Schema.Schema<infer A> ? A : never;
 
-export interface WorkflowEvent<Payload> {
+export type WorkflowEvent<Payload> = Readonly<Omit<CloudflareWorkflowEvent<Payload>, "payload">> & {
   readonly payload: Payload;
-  readonly timestamp?: Date | string | number;
-  readonly instanceId?: string;
-}
+};
 
 export interface WorkflowContext<Payload> {
   readonly payload: Payload;
@@ -147,7 +145,7 @@ export type WorkflowEntrypointConstructor = new (...args: Array<any>) => {
   readonly ctx?: unknown;
 };
 
-export type CloudflareWorkflowEventAny = CloudflareWorkflowEvent<unknown>;
+export type CloudflareWorkflowEventAny = Readonly<CloudflareWorkflowEvent<unknown>>;
 
 export interface WorkflowBindingDescriptor {
   readonly module: string;

@@ -20,7 +20,11 @@ import {
   workflowConfigEntries,
   withCloudflareWorkflows,
 } from "../src/vite.ts";
-import type { NativeWorkflowStep, WorkflowEntrypointConstructor } from "../src/types.ts";
+import type {
+  NativeWorkflowStep,
+  WorkflowEntrypointConstructor,
+  WorkflowEvent,
+} from "../src/types.ts";
 import type { SideffectWorkflowsPlugin } from "../src/vite.ts";
 import type { WorkflowStepContext } from "cloudflare:workers";
 
@@ -78,6 +82,19 @@ function fakeNativeStep(calls: Array<unknown> = []): NativeWorkflowStep {
         type: options.type,
       };
     },
+  };
+}
+
+function fakeWorkflowEvent<Payload>(
+  payload: Payload,
+  overrides: Partial<Omit<WorkflowEvent<Payload>, "payload">> = {},
+): WorkflowEvent<Payload> {
+  return {
+    payload,
+    timestamp: new Date(0),
+    instanceId: "instance-1",
+    workflowName: "test-workflow",
+    ...overrides,
   };
 }
 
@@ -147,12 +164,52 @@ test("workflow engine runs an async workflow through native step.do", async () =
   const result = await WorkflowEngine.run(layer, {
     env: {},
     ctx: {},
-    event: { payload: { imageId: "img_123" } },
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
     step: fakeNativeStep(calls),
   });
 
   expect(result).toEqual({ id: "img_123" });
   expect(calls).toEqual([["fetch image"]]);
+});
+
+test("workflow event payload uses decoded workflow payload and preserves metadata", async () => {
+  const numericWorkflow = Workflow.make({
+    name: "numeric-workflow",
+    payload: Schema.Struct({ count: Schema.NumberFromString }),
+  });
+  const rawEvent = fakeWorkflowEvent(
+    { count: "42" },
+    {
+      instanceId: "instance-42",
+      workflowName: "numeric-workflow",
+      schedule: { cron: "*/5 * * * *", scheduledTime: 42 },
+    },
+  );
+  const layer = numericWorkflow.toLayer(async (workflow) => ({
+    payload: workflow.payload,
+    eventPayload: workflow.event.payload,
+    timestamp: workflow.event.timestamp,
+    instanceId: workflow.event.instanceId,
+    workflowName: workflow.event.workflowName,
+    schedule: workflow.event.schedule,
+  }));
+
+  const result = await WorkflowEngine.run(layer, {
+    env: {},
+    ctx: {},
+    event: rawEvent,
+    step: fakeNativeStep(),
+  });
+
+  expect(result).toEqual({
+    payload: { count: 42 },
+    eventPayload: { count: 42 },
+    timestamp: new Date(0),
+    instanceId: "instance-42",
+    workflowName: "numeric-workflow",
+    schedule: { cron: "*/5 * * * *", scheduledTime: 42 },
+  });
+  expect(rawEvent.payload).toEqual({ count: "42" });
 });
 
 test("step run callbacks receive Cloudflare WorkflowStepContext fields", async () => {
@@ -184,7 +241,7 @@ test("step run callbacks receive Cloudflare WorkflowStepContext fields", async (
   const result = await WorkflowEngine.run(layer, {
     env: {},
     ctx: {},
-    event: { payload: { imageId: "img_123" } },
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
     step: nativeStep,
   });
 
@@ -213,7 +270,7 @@ test("workflow engine preserves tagged errors from async steps", async () => {
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: "missing" } },
+      event: fakeWorkflowEvent({ imageId: "missing" }),
       step: fakeNativeStep(),
     }),
   ).rejects.toBeInstanceOf(MissingImage);
@@ -237,7 +294,7 @@ test("workflow engine accepts Effect workflow bodies and preserves catchTag", as
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: "missing" } },
+      event: fakeWorkflowEvent({ imageId: "missing" }),
       step: fakeNativeStep(),
     }),
   ).rejects.toBeInstanceOf(NonRetryableError);
@@ -256,7 +313,7 @@ test("step.do forwards Cloudflare retry and timeout options", async () => {
   await WorkflowEngine.run(layer, {
     env: {},
     ctx: {},
-    event: { payload: { imageId: "img_123" } },
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
     step: fakeNativeStep(calls),
   });
 
@@ -272,7 +329,7 @@ test("invalid workflow payload becomes NonRetryableError", async () => {
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: 123 } },
+      event: fakeWorkflowEvent({ imageId: 123 }),
       step: fakeNativeStep(),
     }),
   ).rejects.toBeInstanceOf(NonRetryableError);
@@ -285,7 +342,7 @@ test("workflow payload decoding uses injected native NonRetryableError", async (
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: 123 } },
+      event: fakeWorkflowEvent({ imageId: 123 }),
       step: fakeNativeStep(),
       NonRetryableError: NativeNonRetryableError,
     }),
@@ -304,7 +361,7 @@ test("step schema decoding uses injected native NonRetryableError", async () => 
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: "img_123" } },
+      event: fakeWorkflowEvent({ imageId: "img_123" }),
       step: fakeNativeStep(),
       NonRetryableError: NativeNonRetryableError,
     }),
@@ -323,7 +380,7 @@ test("local NonRetryableError is converted when native constructor is injected",
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: "img_123" } },
+      event: fakeWorkflowEvent({ imageId: "img_123" }),
       step: fakeNativeStep(),
       NonRetryableError: NativeNonRetryableError,
     }),
@@ -366,7 +423,7 @@ test("rollback handlers are registered as native Cloudflare rollback options", a
     WorkflowEngine.run(layer, {
       env: {},
       ctx: {},
-      event: { payload: { imageId: "img_123" } },
+      event: fakeWorkflowEvent({ imageId: "img_123" }),
       step: fakeNativeStep(calls),
     }),
   ).rejects.toBe(failure);
@@ -419,7 +476,7 @@ test("rollback handlers receive context and forward rollback config", async () =
   await WorkflowEngine.run(layer, {
     env: { binding: true },
     ctx: { request: true },
-    event: { payload: { imageId: "img_123" } },
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
     step: fakeNativeStep(calls),
   });
 
@@ -465,7 +522,7 @@ test("sleep, sleepUntil, and waitForEvent delegate to native WorkflowStep", asyn
   const result = await WorkflowEngine.run(layer, {
     env: {},
     ctx: {},
-    event: { payload: { imageId: "img_123" } },
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
     step: fakeNativeStep(calls),
   });
 
@@ -500,7 +557,7 @@ test("workflow entrypoints create native subclasses with generated run methods",
 
   expect(entrypoints.ResizeImage.prototype).toBeInstanceOf(FakeWorkflowEntrypoint);
   await expect(
-    instance.run({ payload: { imageId: "img_123" } }, fakeNativeStep()),
+    instance.run(fakeWorkflowEvent({ imageId: "img_123" }), fakeNativeStep()),
   ).resolves.toEqual({ id: "img_123" });
 });
 
