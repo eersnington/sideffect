@@ -13,6 +13,9 @@
     "build:sideffect": "vp run sideffect#build",
     "check": "vp check",
     "test": "vp run --filter \"./packages/*\" test",
+    "test:e2e:vite": "bun run build:sideffect && bun run --cwd workbench/cloudflare-workflows-vite test:e2e",
+    "test:e2e:tanstack": "bun run build:sideffect && bun run --cwd workbench/cloudflare-workflows-tanstack test:e2e",
+    "test:e2e": "bun run test:e2e:vite && bun run test:e2e:tanstack",
     "prepare": "vp config"
   },
   "devDependencies": {

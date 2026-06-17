@@ -5,12 +5,15 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
+    "deploy:dry-run": "bun run build && wrangler deploy --dry-run",
     "start": "vp dev",
     "dev": "vp dev",
     "build": "vp build",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "test:e2e": "vp test --config vitest.config.e2e.ts tests/cloudflare-workflows.e2e.test.ts"
   },
   "dependencies": {
+    "cloudflare-workflows-shared": "workspace:",
     "sideffect": "workspace:"
   },
   "devDependencies": {

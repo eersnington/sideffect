@@ -11,6 +11,8 @@
     "build": "vp build",
     "preview": "bun run build && vp preview",
     "deploy": "bun run build && wrangler deploy",
+    "deploy:dry-run": "bun run build && wrangler deploy --dry-run",
+    "test:e2e": "bun run generate-routes && vp test --config vitest.config.e2e.ts tests/cloudflare-workflows.e2e.test.ts",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
@@ -22,6 +24,7 @@
     "@tanstack/react-router-ssr-query": "latest",
     "@tanstack/react-start": "latest",
     "@tanstack/router-plugin": "^1.132.0",
+    "cloudflare-workflows-shared": "workspace:",
     "effect": "4.0.0-beta.78",
     "lucide-react": "^0.545.0",
     "react": "^19.2.0",

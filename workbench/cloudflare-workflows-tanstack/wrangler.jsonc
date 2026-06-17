@@ -7,7 +7,7 @@
   "name": "cloudflare-workflows-tanstack",
   "compatibility_date": "2025-09-02",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "@tanstack/react-start/server-entry",
+  "main": "src/worker.ts",
   "observability": {
     "enabled": true,
   },

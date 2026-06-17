@@ -1,0 +1,15 @@
+{
+  "name": "cloudflare-workflows-shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "effect": "4.0.0-beta.78",
+    "sideffect": "workspace:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260605.1",
+    "typescript": "catalog:"
+  }
+}

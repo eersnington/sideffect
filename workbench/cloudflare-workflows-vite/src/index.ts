@@ -1,4 +1,30 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";
+import { sharedWorkflowCases } from "cloudflare-workflows-shared";
+import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
+import type { SharedWorkflowCase } from "cloudflare-workflows-shared";
+
+const nativeWorkflowCase = {
+  key: "native-check",
+  binding: "NATIVE_CHECK",
+  className: "NativeCheck",
+  params: { label: "native" },
+} satisfies SharedWorkflowCase;
+
+const e2eCases = [
+  ...sharedWorkflowCases,
+  {
+    ...nativeWorkflowCase,
+  },
+] satisfies Array<SharedWorkflowCase>;
+
+export class NativeCheck extends WorkflowEntrypoint<Env> {
+  override async run(event: WorkflowEvent<{ label: string }>, step: WorkflowStep) {
+    return step.do("native check", async () => ({
+      label: event.payload.label,
+      mode: "native",
+    }));
+  }
+}
 
 export class Counter extends DurableObject<Env> {
   async fetch(): Promise<Response> {
@@ -23,18 +49,42 @@ export default {
       return stub.fetch(req);
     }
 
+    if (url.pathname === "/e2e/workflows") {
+      return Response.json(e2eCases);
+    }
+
+    const workflowMatch = /^\/e2e\/workflows\/([^/]+)\/(create|status)$/.exec(url.pathname);
+    if (workflowMatch) {
+      const [, key, action] = workflowMatch;
+      const e2eCase = e2eCases.find((entry) => entry.key === key);
+      if (!e2eCase) {
+        return Response.json({ error: `Unknown workflow case ${key}` }, { status: 404 });
+      }
+
+      const id = url.searchParams.get("id") ?? `${e2eCase.key}-${Date.now()}`;
+      const workflow = (env as unknown as Record<string, Workflow<unknown>>)[e2eCase.binding];
+
+      if (action === "create") {
+        const instance = await workflow.create({ id, params: e2eCase.params });
+        return Response.json({ id: instance.id, status: await instance.status() });
+      }
+
+      const instance = await workflow.get(id);
+      return Response.json(await instance.status());
+    }
+
     const id = url.searchParams.get("instanceId");
     if (id) {
-      const instance = await env.MY_WORKFLOW.get(id);
+      const instance = await env.ADD_NUMBERS.get(id);
       return Response.json({
         status: await instance.status(),
       });
     }
 
-    const instance = await env.MY_WORKFLOW.create({
+    const instance = await env.ADD_NUMBERS.create({
       params: {
-        email: "demo@example.com",
-        metadata: { source: "vite" },
+        left: 2,
+        right: 3,
       },
     });
 

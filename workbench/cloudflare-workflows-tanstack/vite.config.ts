@@ -12,7 +12,17 @@ const config = defineConfig({
   resolve: { tsconfigPaths: true },
   plugins: [
     devtools(),
-    withCloudflareWorkflows(cloudflare, { viteEnvironment: { name: "ssr" } }),
+    withCloudflareWorkflows(cloudflare, {
+      viteEnvironment: { name: "ssr" },
+      workflowPaths: ["../cloudflare-workflows-shared/src/workflows.ts"],
+      config: {
+        durable_objects: {
+          bindings: [{ name: "COUNTER", class_name: "Counter" }],
+        },
+        migrations: [{ tag: "v1", new_sqlite_classes: ["Counter"] }],
+        workflows: [{ binding: "NATIVE_CHECK", name: "native-check", class_name: "NativeCheck" }],
+      },
+    }),
     tailwindcss(),
     tanstackStart(),
     viteReact(),

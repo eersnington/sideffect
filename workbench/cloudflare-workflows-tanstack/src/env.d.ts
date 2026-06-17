@@ -1,4 +1,4 @@
-import type { Counter } from "./index";
+import type { Counter } from "./worker";
 
 declare global {
   interface Env {
