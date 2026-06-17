@@ -6,7 +6,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { withCloudflareWorkflows } from "sideffect/vite";
+import { withCloudflareWorkflows } from "../../packages/sideffect/src/vite";
 
 const config = defineConfig({
   resolve: { tsconfigPaths: true },
