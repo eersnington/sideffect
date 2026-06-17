@@ -142,6 +142,22 @@ By default Sideffect scans `src/workflows`. If your workflow files live elsewher
 
 Your source `wrangler.jsonc` does not need a `workflows` field. Sideffect writes the workflow config into the Vite build output and generates env types for the workflow bindings it creates.
 
+## Static Discovery
+
+The Vite adapter discovers workflow layers with TypeScript AST analysis before Worker modules run. It does not execute your source files during discovery.
+
+Discovery supports statically knowable local workflow layers, including direct `Workflow.make(...).toLayer(...)` exports, local workflow definitions followed by `workflow.toLayer(...)`, local relative imports of workflow definitions, and default-exported workflow layers.
+
+Before triggering a publish run, verify this discovery path with the package checks and Cloudflare workflow workbench tests:
+
+```sh
+bun run check
+bun run test
+bun run build:sideffect
+bun run test:e2e:vite
+bun run test:e2e:tanstack
+```
+
 Use the generated binding from your Worker as usual:
 
 ```ts
