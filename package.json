@@ -12,6 +12,9 @@
     "build": "vp run -r build",
     "build:sideffect": "vp run sideffect#build",
     "check": "vp check",
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "changeset:version": "changeset version",
     "test": "vp run --filter \"./packages/*\" test",
     "test:e2e:vite": "bun run build:sideffect && bun run --cwd workbench/cloudflare-workflows-vite test:e2e",
     "test:e2e:tanstack": "bun run build:sideffect && bun run --cwd workbench/cloudflare-workflows-tanstack test:e2e",
@@ -19,6 +22,7 @@
     "prepare": "vp config"
   },
   "devDependencies": {
+    "@changesets/cli": "2.31.0",
     "vite-plus": "catalog:"
   },
   "overrides": {

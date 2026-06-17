@@ -1,20 +1,36 @@
 name: Publish to npm
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: Exact sideffect version to publish, e.g. 0.2.2
+        required: true
+      confirm:
+        description: Type publish sideffect@<version>
+        required: true
+      npm_tag:
+        description: npm dist-tag
+        required: true
+        default: latest
+        type: choice
+        options:
+          - latest
+          - next
+          - beta
 
 permissions:
   contents: read
-  id-token: write # required for npm Trusted Publishing (OIDC)
 
 jobs:
-  publish:
+  verify:
+    if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -25,6 +41,35 @@ jobs:
         with:
           node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Validate release request
+        env:
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          package_version="$(node -p "require('./packages/sideffect/package.json').version")"
+          expected_confirm="publish sideffect@${package_version}"
+
+          if [ "${INPUT_VERSION}" != "${package_version}" ]; then
+            printf 'Refusing to publish: workflow input version "%s" does not match packages/sideffect/package.json version "%s". Run bun run changeset:version and dispatch this workflow with the exact package version.\n' "${INPUT_VERSION}" "${package_version}" >&2
+            exit 1
+          fi
+
+          if [ "${INPUT_CONFIRM}" != "${expected_confirm}" ]; then
+            printf 'Refusing to publish: confirmation must exactly equal "%s". No package was published.\n' "${expected_confirm}" >&2
+            exit 1
+          fi
+
+          pending_changesets="$(find .changeset -maxdepth 1 -type f -name '*.md' ! -name README.md -print)"
+          if [ -n "${pending_changesets}" ]; then
+            printf 'Refusing to publish: pending changeset files are still present. Run bun run changeset:version, commit the generated release changes, then dispatch this workflow again.\n%s\n' "${pending_changesets}" >&2
+            exit 1
+          fi
+
+          if npm view "sideffect@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            printf 'Refusing to publish: sideffect@%s already exists on npm. The registry was not changed.\n' "${package_version}" >&2
+            exit 1
+          fi
 
       - name: Install deps
         run: bun install --frozen-lockfile
@@ -45,6 +90,40 @@ jobs:
       - name: Run Cloudflare workflow E2E
         run: bun run test:e2e
 
-      - name: Publish sideffect (OIDC, no token)
+      - name: Pack sideffect
         working-directory: packages/sideffect
-        run: npm publish --provenance
+        run: |
+          mkdir -p ../../release-artifacts
+          npm pack --pack-destination ../../release-artifacts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sideffect-package
+          path: release-artifacts/sideffect-*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm Trusted Publishing (OIDC)
+    steps:
+      # npm Trusted Publishing requires npm >= 11.5.1 and Node >= 22.14.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sideffect-package
+          path: release-artifacts
+
+      - name: Publish sideffect (OIDC, no token)
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          NPM_TAG: ${{ inputs.npm_tag }}
+        run: npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
