@@ -42,6 +42,9 @@ jobs:
         working-directory: packages/sideffect
         run: bun run build
 
+      - name: Run Cloudflare workflow E2E
+        run: bun run test:e2e
+
       - name: Publish sideffect (OIDC, no token)
         working-directory: packages/sideffect
         run: npm publish --provenance
