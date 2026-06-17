@@ -23,12 +23,23 @@ const identifierName = /^[$A-Z_a-z][$\w]*$/;
 export type WorkflowDiscoveryPaths = Array<string>;
 
 /** @internal Import target for a discovered Sideffect workflow layer. */
-export interface WorkflowLayerImport {
-  /** Module path containing the workflow layer export. */
-  readonly modulePath: string;
-  /** Named export that contains the workflow layer. */
-  readonly exportName: string;
-}
+export type WorkflowLayerImport =
+  | {
+      /** Module path containing the workflow layer export. */
+      readonly modulePath: string;
+      /** Export form that contains the workflow layer. */
+      readonly exportKind: "named";
+      /** Named export that contains the workflow layer. */
+      readonly exportName: string;
+    }
+  | {
+      /** Module path containing the workflow layer export. */
+      readonly modulePath: string;
+      /** Export form that contains the workflow layer. */
+      readonly exportKind: "default";
+      /** Default export that contains the workflow layer. */
+      readonly exportName: "default";
+    };
 
 /** @internal Workflow binding generated from a discovered Sideffect layer. */
 export interface CapturedSideffectWorkflow {
@@ -38,14 +49,10 @@ export interface CapturedSideffectWorkflow {
 }
 
 /** @internal Static workflow export discovered by TypeScript AST traversal. */
-interface DiscoveredWorkflowExport {
+type DiscoveredWorkflowExport = WorkflowLayerImport & {
   /** Cloudflare Workflow name from `Workflow.make({ name })`. */
   readonly workflowName: string;
-  /** Source module that exports the workflow layer. */
-  readonly modulePath: string;
-  /** Named export containing the workflow layer. */
-  readonly exportName: string;
-}
+};
 
 /** @internal Local re-export shape followed by workflow discovery. */
 type ReExportDeclaration =
@@ -55,6 +62,12 @@ type ReExportDeclaration =
       readonly exports: Array<{ readonly imported: string; readonly exported: string }>;
     }
   | { readonly kind: "all"; readonly specifier: string };
+
+/** @internal Local import bindings that may reference exported workflow definitions. */
+interface LocalImportDeclaration {
+  readonly specifier: string;
+  readonly imports: Array<{ readonly imported: string; readonly local: string }>;
+}
 
 /**
  * Discovers static Sideffect workflow layer exports under the configured paths.
@@ -81,6 +94,7 @@ export function collectWorkflowEntries(
           .join("");
         validateWorkflowExportName(className);
 
+        const modulePath = workflow.modulePath.replace(/\\/g, "/");
         byClassName.set(className, {
           kind: "sideffect",
           config: {
@@ -92,10 +106,10 @@ export function collectWorkflowEntries(
             name: workflow.workflowName,
             class_name: className,
           },
-          layer: {
-            modulePath: workflow.modulePath.replace(/\\/g, "/"),
-            exportName: workflow.exportName,
-          },
+          layer:
+            workflow.exportKind === "default"
+              ? { modulePath, exportKind: "default", exportName: "default" }
+              : { modulePath, exportKind: "named", exportName: workflow.exportName },
         });
       }
     }
@@ -152,11 +166,11 @@ function collectWorkflowExportsFromFile(
   }
   visited.add(filePath);
 
-  const analysis = analyzeWorkflowSourceFile(filePath);
+  const analysis = analyzeWorkflowSourceFile(filePath, new Set());
   const exports = new Map(analysis.exports);
 
   for (const reExport of analysis.reExports) {
-    if (!reExport.specifier.startsWith(".") && !reExport.specifier.startsWith("/")) {
+    if (!isLocalSpecifier(reExport.specifier)) {
       continue;
     }
 
@@ -170,7 +184,9 @@ function collectWorkflowExportsFromFile(
     const targetExports = collectWorkflowExportsFromFile(resolved, visited);
     if (reExport.kind === "all") {
       for (const [exportName, workflow] of targetExports) {
-        exports.set(exportName, workflow);
+        if (exportName !== "default") {
+          exports.set(exportName, workflow);
+        }
       }
       continue;
     }
@@ -186,8 +202,55 @@ function collectWorkflowExportsFromFile(
   return exports;
 }
 
-function analyzeWorkflowSourceFile(filePath: string): {
+function collectWorkflowDefinitionExportsFromFile(
+  filePath: string,
+  visited: Set<string>,
+): Map<string, string> {
+  if (visited.has(filePath)) {
+    return new Map();
+  }
+  visited.add(filePath);
+
+  const analysis = analyzeWorkflowSourceFile(filePath, visited);
+  const exports = new Map(analysis.definitionExports);
+
+  for (const reExport of analysis.reExports) {
+    if (!isLocalSpecifier(reExport.specifier)) {
+      continue;
+    }
+
+    const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
+    if (!resolved) {
+      continue;
+    }
+
+    const targetExports = collectWorkflowDefinitionExportsFromFile(resolved, visited);
+    if (reExport.kind === "all") {
+      for (const [exportName, workflowName] of targetExports) {
+        if (exportName !== "default") {
+          exports.set(exportName, workflowName);
+        }
+      }
+      continue;
+    }
+
+    for (const exportEntry of reExport.exports) {
+      const workflowName = targetExports.get(exportEntry.imported);
+      if (workflowName) {
+        exports.set(exportEntry.exported, workflowName);
+      }
+    }
+  }
+
+  return exports;
+}
+
+function analyzeWorkflowSourceFile(
+  filePath: string,
+  definitionVisited: Set<string>,
+): {
   readonly exports: Map<string, DiscoveredWorkflowExport>;
+  readonly definitionExports: Map<string, string>;
   readonly reExports: Array<ReExportDeclaration>;
 } {
   const source = readFileSync(filePath, "utf8");
@@ -202,7 +265,16 @@ function analyzeWorkflowSourceFile(filePath: string): {
   const workflowDefinitions = new Map<string, string>();
   const workflowLayers = new Map<string, string>();
   const exports = new Map<string, DiscoveredWorkflowExport>();
+  const definitionExports = new Map<string, string>();
   const reExports: Array<ReExportDeclaration> = [];
+
+  for (const [name, workflowName] of collectImportedWorkflowDefinitions(
+    sourceFile,
+    filePath,
+    definitionVisited,
+  )) {
+    workflowDefinitions.set(name, workflowName);
+  }
 
   for (const statement of sourceFile.statements) {
     if (ts.isVariableStatement(statement)) {
@@ -219,6 +291,9 @@ function analyzeWorkflowSourceFile(filePath: string): {
         const workflowName = workflowNameFromMakeCall(declaration.initializer, workflowBindings);
         if (workflowName) {
           workflowDefinitions.set(name, workflowName);
+          if (exported) {
+            definitionExports.set(name, workflowName);
+          }
           continue;
         }
 
@@ -236,9 +311,38 @@ function analyzeWorkflowSourceFile(filePath: string): {
           exports.set(name, {
             workflowName: layerWorkflowName,
             modulePath: filePath,
+            exportKind: "named",
             exportName: name,
           });
         }
+      }
+      continue;
+    }
+
+    if (ts.isExportAssignment(statement)) {
+      if (statement.isExportEquals) {
+        continue;
+      }
+
+      const expression = skipOuterExpressions(statement.expression);
+      const layerWorkflowName =
+        workflowNameFromLayerExpression(expression, workflowBindings, workflowDefinitions) ??
+        (ts.isIdentifier(expression) ? workflowLayers.get(expression.text) : undefined);
+      if (layerWorkflowName) {
+        exports.set("default", {
+          workflowName: layerWorkflowName,
+          modulePath: filePath,
+          exportKind: "default",
+          exportName: "default",
+        });
+        continue;
+      }
+
+      const workflowName = ts.isIdentifier(expression)
+        ? workflowDefinitions.get(expression.text)
+        : workflowNameFromMakeCall(expression, workflowBindings);
+      if (workflowName) {
+        definitionExports.set("default", workflowName);
       }
       continue;
     }
@@ -275,16 +379,32 @@ function analyzeWorkflowSourceFile(filePath: string): {
     for (const exportEntry of exportSpecifierNames(statement, statement.exportClause)) {
       const workflowName = workflowLayers.get(exportEntry.imported);
       if (workflowName) {
-        exports.set(exportEntry.exported, {
-          workflowName,
-          modulePath: filePath,
-          exportName: exportEntry.exported,
-        });
+        exports.set(
+          exportEntry.exported,
+          exportEntry.exported === "default"
+            ? {
+                workflowName,
+                modulePath: filePath,
+                exportKind: "default",
+                exportName: "default",
+              }
+            : {
+                workflowName,
+                modulePath: filePath,
+                exportKind: "named",
+                exportName: exportEntry.exported,
+              },
+        );
+      }
+
+      const definitionWorkflowName = workflowDefinitions.get(exportEntry.imported);
+      if (definitionWorkflowName) {
+        definitionExports.set(exportEntry.exported, definitionWorkflowName);
       }
     }
   }
 
-  return { exports, reExports };
+  return { exports, definitionExports, reExports };
 }
 
 function collectWorkflowBindings(sourceFile: ts.SourceFile): {
@@ -323,6 +443,75 @@ function collectWorkflowBindings(sourceFile: ts.SourceFile): {
   }
 
   return { names, namespaces };
+}
+
+function collectImportedWorkflowDefinitions(
+  sourceFile: ts.SourceFile,
+  filePath: string,
+  visited: Set<string>,
+): Map<string, string> {
+  const definitions = new Map<string, string>();
+
+  for (const importDeclaration of collectLocalImports(sourceFile)) {
+    const resolved = resolveSourceFile(dirname(filePath), importDeclaration.specifier);
+    if (!resolved) {
+      continue;
+    }
+
+    const targetDefinitions = collectWorkflowDefinitionExportsFromFile(resolved, visited);
+    for (const importEntry of importDeclaration.imports) {
+      const workflowName = targetDefinitions.get(importEntry.imported);
+      if (workflowName) {
+        definitions.set(importEntry.local, workflowName);
+      }
+    }
+  }
+
+  return definitions;
+}
+
+function collectLocalImports(sourceFile: ts.SourceFile): Array<LocalImportDeclaration> {
+  return sourceFile.statements.flatMap((statement) => {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      statement.importClause?.isTypeOnly ||
+      !statement.moduleSpecifier ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      !isLocalSpecifier(statement.moduleSpecifier.text)
+    ) {
+      return [];
+    }
+
+    const imports: Array<{ readonly imported: string; readonly local: string }> = [];
+    const importClause = statement.importClause;
+    if (!importClause) {
+      return [];
+    }
+
+    if (importClause.name && identifierName.test(importClause.name.text)) {
+      imports.push({ imported: "default", local: importClause.name.text });
+    }
+
+    const namedBindings = importClause.namedBindings;
+    if (!namedBindings || ts.isNamespaceImport(namedBindings)) {
+      return imports.length > 0 ? [{ specifier: statement.moduleSpecifier.text, imports }] : [];
+    }
+
+    for (const element of namedBindings.elements) {
+      if (element.isTypeOnly) {
+        continue;
+      }
+
+      const importedName = element.propertyName ?? element.name;
+      const imported = ts.isIdentifier(importedName) ? importedName.text : undefined;
+      const local = element.name.text;
+      if (imported && identifierName.test(imported) && identifierName.test(local)) {
+        imports.push({ imported, local });
+      }
+    }
+
+    return imports.length > 0 ? [{ specifier: statement.moduleSpecifier.text, imports }] : [];
+  });
 }
 
 function workflowNameFromLayerExpression(
@@ -431,6 +620,10 @@ function exportSpecifierNames(
 
     return imported && exported ? [{ imported, exported }] : [];
   });
+}
+
+function isLocalSpecifier(specifier: string): boolean {
+  return specifier.startsWith(".") || specifier.startsWith("/");
 }
 
 function skipOuterExpressions(expression: ts.Expression): ts.Expression {

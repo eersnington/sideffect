@@ -48,4 +48,22 @@ export const sharedWorkflowCases = [
     className: "PauseAndReturn",
     params: { marker: "slept" },
   },
+  {
+    key: "imported-definition",
+    binding: "IMPORTED_DEFINITION",
+    className: "ImportedDefinition",
+    params: { message: "imported" },
+  },
+  {
+    key: "default-direct",
+    binding: "DEFAULT_DIRECT",
+    className: "DefaultDirect",
+    params: { marker: "default-direct" },
+  },
+  {
+    key: "default-local-layer",
+    binding: "DEFAULT_LOCAL_LAYER",
+    className: "DefaultLocalLayer",
+    params: { message: "default-local" },
+  },
 ] satisfies Array<SharedWorkflowCase>;

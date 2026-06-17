@@ -13,6 +13,7 @@ import {
   returnBindingMetadata,
   sleepMarker,
 } from "./steps";
+import { importedDefinitionWorkflow } from "./imported-definition";
 
 export const addNumbersLayer = Workflow.make({
   name: "add-numbers",
@@ -98,3 +99,11 @@ export const pauseAndReturnLayer = pauseAndReturnWorkflow.toLayer(async ({ paylo
 
   return step.do(sleepMarker, payload);
 });
+
+export const importedDefinitionLayer = importedDefinitionWorkflow.toLayer(
+  async ({ payload }, step) => {
+    const echoed = await step.do(plainAsyncEcho, { message: payload.message });
+
+    return { echoed };
+  },
+);

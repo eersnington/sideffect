@@ -36,6 +36,10 @@ export default __sideffect_worker.default ?? {};
 
   const workflowImports = sideffectWorkflows
     .map((workflow, index) => {
+      if (workflow.layer.exportKind === "default") {
+        return `import __sideffect_workflow_${index} from ${JSON.stringify(workflow.layer.modulePath)};`;
+      }
+
       return `import { ${workflow.layer.exportName} as __sideffect_workflow_${index} } from ${JSON.stringify(workflow.layer.modulePath)};`;
     })
     .join("\n");
@@ -43,7 +47,7 @@ export default __sideffect_worker.default ?? {};
     .map((workflow, index) => {
       const className = workflow.config.class_name;
       const literal = JSON.stringify(className);
-      return `  ${className}: __sideffectWorkflowLayer(__sideffect_workflow_${index}, ${JSON.stringify("default")}, ${literal}, ${JSON.stringify(workflow.layer.modulePath)}),`;
+      return `  ${className}: __sideffectWorkflowLayer(__sideffect_workflow_${index}, ${JSON.stringify(workflow.layer.exportName)}, ${literal}, ${JSON.stringify(workflow.layer.modulePath)}),`;
     })
     .join("\n");
   const exports = sideffectWorkflows
@@ -60,10 +64,9 @@ ${workflowImports}
 export * from ${JSON.stringify(config.workerImport)};
 export default __sideffect_worker.default ?? {};
 
-function __sideffectWorkflowLayer(module, exportName, className, modulePath) {
-  const layer = exportName === "default" ? module : module[exportName];
+function __sideffectWorkflowLayer(layer, exportName, className, modulePath) {
   if (!layer || layer._tag !== "WorkflowLayer") {
-    throw new TypeError(\`Expected workflow "\${className}" from "\${modulePath}" to be a Sideffect WorkflowLayer. Export a layer with Workflow.make({ name }).toLayer(...).\`);
+    throw new TypeError(\`Expected workflow "\${className}" export "\${exportName}" from "\${modulePath}" to be a Sideffect WorkflowLayer. Export a layer with Workflow.make({ name }).toLayer(...).\`);
   }
   return layer;
 }
@@ -100,6 +103,10 @@ function generateWorkflowEnvTypes(
         .replace(/\\/g, "/")
         .replace(/\.[cm]?[jt]sx?$/, "");
       const specifier = path.startsWith(".") ? path : `./${path}`;
+      if (workflow.layer.exportKind === "default") {
+        return `import type __SideffectWorkflow${index} from ${JSON.stringify(specifier)};`;
+      }
+
       return `import type { ${workflow.layer.exportName} as __SideffectWorkflow${index} } from ${JSON.stringify(specifier)};`;
     })
     .join("\n");

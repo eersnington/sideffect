@@ -7,6 +7,9 @@ import type { bindingRoundtripLayer as __SideffectWorkflow3 } from "../cloudflar
 import type { payloadDecodingLayer as __SideffectWorkflow4 } from "../cloudflare-workflows-shared/src/workflows";
 import type { stepContextLayer as __SideffectWorkflow5 } from "../cloudflare-workflows-shared/src/workflows";
 import type { pauseAndReturnLayer as __SideffectWorkflow6 } from "../cloudflare-workflows-shared/src/workflows";
+import type { importedDefinitionLayer as __SideffectWorkflow7 } from "../cloudflare-workflows-shared/src/workflows";
+import type __SideffectWorkflow8 from "../cloudflare-workflows-shared/src/default-direct-workflow";
+import type __SideffectWorkflow9 from "../cloudflare-workflows-shared/src/default-local-layer-workflow";
 
 type __SideffectCloudflareWorkflow<Payload> = Workflow<Payload>;
 type __SideffectWorkflowPayload<T> = T extends WorkflowLayer<infer Payload, any> ? Payload : never;
@@ -20,6 +23,9 @@ declare global {
     PAYLOAD_DECODING: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow4>>;
     STEP_CONTEXT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow5>>;
     PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow6>>;
+    IMPORTED_DEFINITION: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow7>>;
+    DEFAULT_DIRECT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow8>>;
+    DEFAULT_LOCAL_LAYER: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow9>>;
   }
 
   namespace Cloudflare {
@@ -31,6 +37,9 @@ declare global {
       PAYLOAD_DECODING: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow4>>;
       STEP_CONTEXT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow5>>;
       PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow6>>;
+      IMPORTED_DEFINITION: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow7>>;
+      DEFAULT_DIRECT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow8>>;
+      DEFAULT_LOCAL_LAYER: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow9>>;
     }
   }
 }

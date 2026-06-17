@@ -14,7 +14,11 @@ const config = defineConfig({
     devtools(),
     withCloudflareWorkflows(cloudflare, {
       viteEnvironment: { name: "ssr" },
-      workflowPaths: ["../cloudflare-workflows-shared/src/workflows.ts"],
+      workflowPaths: [
+        "../cloudflare-workflows-shared/src/workflows.ts",
+        "../cloudflare-workflows-shared/src/default-direct-workflow.ts",
+        "../cloudflare-workflows-shared/src/default-local-layer-workflow.ts",
+      ],
       config: {
         durable_objects: {
           bindings: [{ name: "COUNTER", class_name: "Counter" }],

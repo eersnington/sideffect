@@ -760,6 +760,52 @@ test("Sideffect workflows plugin discovers workflows from Vite root before confi
     },
   ));
 
+test("Sideffect workflows plugin imports default workflow layers in generated entry and env types", () =>
+  withTempProject(
+    {
+      "src/index.ts": `export default { async fetch() { return new Response("ok"); } };`,
+      "src/workflows/default-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        const layer = Workflow.make({
+          name: "default-workflow",
+          payload: Schema.String,
+        }).toLayer(async () => undefined);
+
+        export default layer;
+      `,
+    },
+    async (root) => {
+      const plugin = createSideffectWorkflowsPlugin();
+      if (typeof plugin.cloudflare.config !== "function") {
+        throw new Error("Expected cloudflare config customizer");
+      }
+
+      callConfig(plugin, { root });
+      plugin.cloudflare.config({ main: "src/index.ts" });
+      callConfigResolved(plugin, { root });
+
+      const code = await callLoad(plugin, {
+        async resolve() {
+          return { id: join(root, "src/index.ts") };
+        },
+      });
+
+      expect(String(code)).toContain(
+        `import __sideffect_workflow_0 from ${JSON.stringify(join(root, "src/workflows/default-workflow.ts"))}`,
+      );
+      expect(String(code)).toContain(
+        'DefaultWorkflow: __sideffectWorkflowLayer(__sideffect_workflow_0, "default", "DefaultWorkflow"',
+      );
+
+      const envTypes = readFileSync(join(root, "sideffect-env.d.ts"), "utf8");
+      expect(envTypes).toContain(
+        'import type __SideffectWorkflow0 from "./src/workflows/default-workflow";',
+      );
+      expect(envTypes).toContain("DEFAULT_WORKFLOW: __SideffectCloudflareWorkflow<");
+    },
+  ));
+
 test("Sideffect workflows plugin discovers workflows relative to configPath directory", () =>
   withTempProject(
     {
@@ -849,6 +895,77 @@ test("workflow collector discovers aliased Workflow imports and export aliases",
         { binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" },
       ]);
       expect(workflows[0]?.layer.exportName).toBe("myWorkflowLayer");
+    },
+  ));
+
+test("workflow collector discovers imported local workflow definitions", () =>
+  withTempProject(
+    {
+      "src/workflows/definition.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        export const billingWorkflow = Workflow.make({
+          name: "billing-renewal",
+          payload: Schema.String,
+        });
+      `,
+      "src/workflows/billing.ts": `
+        import { billingWorkflow } from "./definition";
+
+        export const billingLayer = billingWorkflow.toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      const workflows = collectWorkflowEntries("src/workflows/billing.ts", root);
+      expect(workflows.map((workflow) => workflow.config)).toEqual([
+        { binding: "BILLING_RENEWAL", name: "billing-renewal", class_name: "BillingRenewal" },
+      ]);
+      expect(workflows[0]?.layer).toMatchObject({
+        exportKind: "named",
+        exportName: "billingLayer",
+      });
+    },
+  ));
+
+test("workflow collector discovers default-exported direct workflow layers", () =>
+  withTempProject(
+    {
+      "src/workflows/default-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        export default Workflow.make({
+          name: "default-workflow",
+          payload: Schema.String,
+        }).toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      const workflows = collectWorkflowEntries("src/workflows", root);
+      expect(workflows.map((workflow) => workflow.config)).toEqual([
+        { binding: "DEFAULT_WORKFLOW", name: "default-workflow", class_name: "DefaultWorkflow" },
+      ]);
+      expect(workflows[0]?.layer).toMatchObject({ exportKind: "default", exportName: "default" });
+    },
+  ));
+
+test("workflow collector discovers default exports of local workflow layer variables", () =>
+  withTempProject(
+    {
+      "src/workflows/default-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+
+        const workflow = Workflow.make({ name: "default-workflow", payload: Schema.String });
+        const layer = workflow.toLayer(async () => undefined);
+
+        export default layer;
+      `,
+    },
+    (root) => {
+      const workflows = collectWorkflowEntries("src/workflows", root);
+      expect(workflows.map((workflow) => workflow.config)).toEqual([
+        { binding: "DEFAULT_WORKFLOW", name: "default-workflow", class_name: "DefaultWorkflow" },
+      ]);
+      expect(workflows[0]?.layer).toMatchObject({ exportKind: "default", exportName: "default" });
     },
   ));
 

@@ -169,6 +169,15 @@ function expectWorkflowOutput(key: string, output: unknown) {
     case "pause-and-return":
       expect(output).toEqual({ marker: "slept" });
       return;
+    case "imported-definition":
+      expect(output).toEqual({ echoed: { message: "imported", mode: "async" } });
+      return;
+    case "default-direct":
+      expect(output).toEqual({ marker: "default-direct" });
+      return;
+    case "default-local-layer":
+      expect(output).toEqual({ echoed: { message: "default-local", mode: "async" } });
+      return;
     case "native-check":
       expect(output).toEqual({ label: "native", mode: "native" });
       return;
