@@ -23,5 +23,9 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
+      - name: Build sideffect
+        working-directory: packages/sideffect
+        run: bun run build
+
       - name: Run Cloudflare workflow E2E
         run: bun run test:e2e

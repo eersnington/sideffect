@@ -23,11 +23,12 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
+      - name: Build sideffect
+        working-directory: packages/sideffect
+        run: bun run build
+
       - name: Check
         run: bun run check
 
       - name: Test packages
         run: bun run test
-
-      - name: Build sideffect
-        run: bun run build:sideffect
