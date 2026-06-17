@@ -148,16 +148,6 @@ The Vite adapter discovers workflow layers with TypeScript AST analysis before W
 
 Discovery supports statically knowable local workflow layers, including direct `Workflow.make(...).toLayer(...)` exports, local workflow definitions followed by `workflow.toLayer(...)`, local relative imports of workflow definitions, and default-exported workflow layers.
 
-Before triggering a publish run, verify this discovery path with the package checks and Cloudflare workflow workbench tests:
-
-```sh
-bun run check
-bun run test
-bun run build:sideffect
-bun run test:e2e:vite
-bun run test:e2e:tanstack
-```
-
 Use the generated binding from your Worker as usual:
 
 ```ts
