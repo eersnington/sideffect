@@ -57,9 +57,8 @@ export const callCounterDurableObject = Step.make("call counter durable object",
   payload: Schema.Struct({ key: Schema.String }),
   result: Schema.Struct({ count: Schema.Number }),
   run: async ({ key }, ctx) => {
-    const env = ctx.env as { readonly COUNTER: DurableObjectNamespace };
-    const id = env.COUNTER.idFromName(`workflow-${key}`);
-    const response = await env.COUNTER.get(id).fetch("https://counter.local/count");
+    const id = ctx.env.COUNTER.idFromName(`workflow-${key}`);
+    const response = await ctx.env.COUNTER.get(id).fetch("https://counter.local/count");
 
     return response.json();
   },
