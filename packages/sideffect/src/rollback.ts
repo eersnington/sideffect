@@ -1,6 +1,6 @@
 import { makeStepDefinition } from "./step.ts";
 import type { WorkflowStepConfig } from "cloudflare:workers";
-import type { RollbackHandler, StepDefinition } from "./types.ts";
+import type { DefaultCloudflareEnv, RollbackHandler, StepDefinition } from "./types.ts";
 
 /** Helpers for attaching native Cloudflare rollback handlers to steps. */
 export const Rollback = {
@@ -19,8 +19,11 @@ export const Rollback = {
    * );
    * ```
    */
-  with<Payload, Result>(handler: RollbackHandler<Payload, Result>, config?: WorkflowStepConfig) {
-    return (step: StepDefinition<Payload, Result>): StepDefinition<Payload, Result> =>
+  with<Payload, Result, Env = DefaultCloudflareEnv>(
+    handler: RollbackHandler<Payload, Result, Env>,
+    config?: WorkflowStepConfig,
+  ) {
+    return (step: StepDefinition<Payload, Result, Env>): StepDefinition<Payload, Result, Env> =>
       makeStepDefinition({
         name: step.name,
         payloadSchema: step.payloadSchema,

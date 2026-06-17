@@ -1,5 +1,6 @@
 import type { Effect, Schema } from "effect";
 import type {
+  env as cloudflareEnv,
   WorkflowEvent as CloudflareWorkflowEvent,
   WorkflowRollbackContext,
   WorkflowStepConfig,
@@ -14,6 +15,9 @@ export type MaybeEffect<A> = A | Promise<A> | Effect.Effect<A, unknown, never>;
 /** Extracts the decoded TypeScript value from an Effect Schema. */
 export type SchemaType<S> = S extends Schema.Schema<infer A> ? A : never;
 
+/** Default Worker environment type extended by `wrangler types` and Sideffect env generation. */
+export type DefaultCloudflareEnv = typeof cloudflareEnv;
+
 /**
  * Cloudflare Workflow event with Sideffect's decoded payload type.
  *
@@ -25,21 +29,21 @@ export type WorkflowEvent<Payload> = Readonly<Omit<CloudflareWorkflowEvent<Paylo
 };
 
 /** Context passed to a Sideffect workflow layer `run` function. */
-export interface WorkflowContext<Payload> {
+export interface WorkflowContext<Payload, Env = DefaultCloudflareEnv> {
   /** Decoded workflow event payload. */
   readonly payload: Payload;
   /** Original Cloudflare event metadata with the decoded payload attached. */
   readonly event: WorkflowEvent<Payload>;
   /** Worker environment/bindings from the WorkflowEntrypoint instance. */
-  readonly env: unknown;
+  readonly env: Env;
   /** Worker execution context from the WorkflowEntrypoint instance. */
   readonly ctx: unknown;
 }
 
 /** Context passed to a Sideffect step definition. */
-export interface StepContext extends WorkflowStepContext {
+export interface StepContext<Env = DefaultCloudflareEnv> extends WorkflowStepContext {
   /** Worker environment/bindings from the WorkflowEntrypoint instance. */
-  readonly env: unknown;
+  readonly env: Env;
 
   /** Worker execution context from the WorkflowEntrypoint instance. */
   readonly ctx: unknown;
@@ -93,14 +97,14 @@ export interface NativeWorkflowStep {
 }
 
 /** Sideffect step helper passed to workflow layer `run` functions. */
-export interface SideffectStep {
+export interface SideffectStep<Env = DefaultCloudflareEnv> {
   /**
    * Runs a typed Sideffect step through Cloudflare's native step system.
    *
    * The payload and result are decoded with the step schemas, and failures to
    * decode are converted to non-retryable workflow failures.
    */
-  do<const S extends StepDefinitionAny>(
+  do<const S extends StepDefinition<any, any, Env>>(
     step: S,
     payload: StepPayload<S>,
     options?: StepOptions,
@@ -117,7 +121,7 @@ export interface SideffectStep {
 }
 
 /** Reusable typed step definition. */
-export interface StepDefinition<Payload, Result> {
+export interface StepDefinition<Payload, Result, Env = DefaultCloudflareEnv> {
   /** Runtime tag used by Sideffect to validate step-like values. */
   readonly _tag: "StepDefinition";
   /** Cloudflare step name used when the step is executed. */
@@ -127,28 +131,28 @@ export interface StepDefinition<Payload, Result> {
   /** Schema used to decode step results before they leave the step. */
   readonly resultSchema: Schema.Schema<Result>;
   /** User function that performs the step work. */
-  readonly run: (payload: Payload, context: StepContext) => MaybeEffect<Result>;
+  readonly run: (payload: Payload, context: StepContext<Env>) => MaybeEffect<Result>;
   /** Optional rollback handler forwarded to Cloudflare's native rollback system. */
-  readonly rollback?: RollbackHandler<Payload, Result>;
+  readonly rollback?: RollbackHandler<Payload, Result, Env>;
   /** Optional Cloudflare rollback step configuration. */
   readonly rollbackConfig?: WorkflowStepConfig;
   /** Applies a transformation helper while preserving the step type. */
-  pipe<A>(fn: (self: StepDefinition<Payload, Result>) => A): A;
+  pipe<A>(fn: (self: StepDefinition<Payload, Result, Env>) => A): A;
 }
 
 /** @internal Any Sideffect step definition. */
-export type StepDefinitionAny = StepDefinition<any, any>;
+export type StepDefinitionAny = StepDefinition<any, any, any>;
 
 /** @internal Extracts the payload type from a step definition. */
-export type StepPayload<S> = S extends StepDefinition<infer Payload, any> ? Payload : never;
+export type StepPayload<S> = S extends StepDefinition<infer Payload, any, any> ? Payload : never;
 
 /** @internal Extracts the result type from a step definition. */
-export type StepResult<S> = S extends StepDefinition<any, infer Result> ? Result : never;
+export type StepResult<S> = S extends StepDefinition<any, infer Result, any> ? Result : never;
 
 /** Context passed to a Sideffect rollback handler. */
-export interface RollbackContext<Payload, Result> {
+export interface RollbackContext<Payload, Result, Env = DefaultCloudflareEnv> {
   /** Worker environment/bindings from the WorkflowEntrypoint instance. */
-  readonly env: unknown;
+  readonly env: Env;
 
   /** Worker execution context from the WorkflowEntrypoint instance. */
   readonly ctx: unknown;
@@ -167,19 +171,19 @@ export interface RollbackContext<Payload, Result> {
 }
 
 /** Function that handles native Cloudflare rollback for a Sideffect step. */
-export type RollbackHandler<Payload, Result> = (
+export type RollbackHandler<Payload, Result, Env = DefaultCloudflareEnv> = (
   result: Result | undefined,
-  context: RollbackContext<Payload, Result>,
+  context: RollbackContext<Payload, Result, Env>,
 ) => MaybeEffect<void>;
 
 /** Function that runs a Sideffect workflow layer. */
-export type WorkflowRun<Payload, Result> = (
-  workflow: WorkflowContext<Payload>,
-  step: SideffectStep,
+export type WorkflowRun<Payload, Result, Env = DefaultCloudflareEnv> = (
+  workflow: WorkflowContext<Payload, Env>,
+  step: SideffectStep<Env>,
 ) => MaybeEffect<Result>;
 
 /** Sideffect workflow definition created by `Workflow.make(...)`. */
-export interface WorkflowDefinition<Payload> {
+export interface WorkflowDefinition<Payload, Env = DefaultCloudflareEnv> {
   /** Runtime tag used by Sideffect to validate workflow definitions. */
   readonly _tag: "WorkflowDefinition";
   /** Cloudflare Workflow name. */
@@ -192,21 +196,23 @@ export interface WorkflowDefinition<Payload> {
    * The returned layer can be discovered by `withCloudflareWorkflows(...)` or
    * passed manually to `WorkflowEntrypoints.make(...)`.
    */
-  toLayer<NextResult>(run: WorkflowRun<Payload, NextResult>): WorkflowLayer<Payload, NextResult>;
+  toLayer<NextResult>(
+    run: WorkflowRun<Payload, NextResult, Env>,
+  ): WorkflowLayer<Payload, NextResult, Env>;
 }
 
 /** Runnable Sideffect workflow layer. */
-export interface WorkflowLayer<Payload, Result = unknown> {
+export interface WorkflowLayer<Payload, Result = unknown, Env = DefaultCloudflareEnv> {
   /** Runtime tag used by Sideffect to validate workflow layers. */
   readonly _tag: "WorkflowLayer";
   /** Workflow definition and payload schema. */
-  readonly workflow: WorkflowDefinition<Payload>;
+  readonly workflow: WorkflowDefinition<Payload, Env>;
   /** Workflow implementation. */
-  readonly run: WorkflowRun<Payload, Result>;
+  readonly run: WorkflowRun<Payload, Result, Env>;
 }
 
 /** @internal Any Sideffect workflow layer. */
-export type WorkflowLayerAny = WorkflowLayer<any, any>;
+export type WorkflowLayerAny = WorkflowLayer<any, any, any>;
 
 /** @internal Named workflow layers used to generate Cloudflare entrypoints. */
 export type WorkflowLayerEntries = Record<string, WorkflowLayerAny>;

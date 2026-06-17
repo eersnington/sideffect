@@ -5,6 +5,7 @@ export { Schema, TaggedError } from "./schema.ts";
 export { Step } from "./step.ts";
 export { Workflow } from "./workflow.ts";
 export type {
+  DefaultCloudflareEnv,
   NativeWorkflowStep,
   RollbackContext,
   SideffectStep,

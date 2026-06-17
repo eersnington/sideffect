@@ -122,7 +122,7 @@ function decodeWorkflowPayload(
 }
 
 /** @internal Creates the typed Sideffect step facade passed to workflow code. */
-function makeSideffectStep(options: EngineRunOptions): SideffectStep {
+function makeSideffectStep(options: EngineRunOptions): SideffectStep<any> {
   return {
     async do<S extends StepDefinitionAny>(
       step: S,

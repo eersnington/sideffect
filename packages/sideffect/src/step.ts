@@ -9,16 +9,17 @@ import type {
   StepOptions,
   StepPayload,
   StepResult,
+  DefaultCloudflareEnv,
 } from "./types.ts";
 
 /** Options for creating a reusable Sideffect step definition. */
-export interface StepMakeOptions<Payload, Result> {
+export interface StepMakeOptions<Payload, Result, Env> {
   /** Schema used to decode the step payload before `run` executes. */
   readonly payload: Schema.Schema<Payload>;
   /** Schema used to decode the step result before it leaves the step. */
   readonly result: Schema.Schema<Result>;
   /** User function that performs the step work. */
-  readonly run: StepDefinition<Payload, Result>["run"];
+  readonly run: StepDefinition<Payload, Result, Env>["run"];
 }
 
 /** Helpers for defining reusable typed workflow steps. */
@@ -38,10 +39,10 @@ export const Step = {
    * });
    * ```
    */
-  make<Payload, Result>(
+  make<Payload, Result, Env = DefaultCloudflareEnv>(
     name: string,
-    options: StepMakeOptions<Payload, Result>,
-  ): StepDefinition<Payload, Result> {
+    options: StepMakeOptions<Payload, Result, Env>,
+  ): StepDefinition<Payload, Result, Env> {
     return makeStepDefinition({
       name,
       payloadSchema: options.payload,
@@ -52,14 +53,14 @@ export const Step = {
 };
 
 /** @internal Creates the immutable step definition object used by public helpers. */
-export function makeStepDefinition<Payload, Result>(options: {
+export function makeStepDefinition<Payload, Result, Env>(options: {
   readonly name: string;
   readonly payloadSchema: Schema.Schema<Payload>;
   readonly resultSchema: Schema.Schema<Result>;
-  readonly run: StepDefinition<Payload, Result>["run"];
-  readonly rollback?: RollbackHandler<Payload, Result>;
-  readonly rollbackConfig?: StepDefinition<Payload, Result>["rollbackConfig"];
-}): StepDefinition<Payload, Result> {
+  readonly run: StepDefinition<Payload, Result, Env>["run"];
+  readonly rollback?: RollbackHandler<Payload, Result, Env>;
+  readonly rollbackConfig?: StepDefinition<Payload, Result, Env>["rollbackConfig"];
+}): StepDefinition<Payload, Result, Env> {
   return {
     _tag: "StepDefinition",
     name: options.name,

@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 
-import type { WorkflowDefinition, WorkflowLayer, WorkflowRun } from "./types.ts";
+import type {
+  DefaultCloudflareEnv,
+  WorkflowDefinition,
+  WorkflowLayer,
+  WorkflowRun,
+} from "./types.ts";
 
 /** Options for creating a Sideffect workflow definition. */
 export interface WorkflowMakeOptions<Payload> {
@@ -30,12 +35,14 @@ export const Workflow = {
    * });
    * ```
    */
-  make<Payload>(options: WorkflowMakeOptions<Payload>): WorkflowDefinition<Payload> {
-    const definition: WorkflowDefinition<Payload> = {
+  make<Payload, Env = DefaultCloudflareEnv>(
+    options: WorkflowMakeOptions<Payload>,
+  ): WorkflowDefinition<Payload, Env> {
+    const definition: WorkflowDefinition<Payload, Env> = {
       _tag: "WorkflowDefinition",
       name: options.name,
       payloadSchema: options.payload,
-      toLayer<Result>(run: WorkflowRun<Payload, Result>): WorkflowLayer<Payload, Result> {
+      toLayer<Result>(run: WorkflowRun<Payload, Result, Env>): WorkflowLayer<Payload, Result, Env> {
         return {
           _tag: "WorkflowLayer",
           workflow: definition,
