@@ -13,52 +13,24 @@ type __SideffectWorkflowPayload<T> = T extends WorkflowLayer<infer Payload, any>
 
 declare global {
   interface Env {
-    ADD_NUMBERS: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow0>
-    >;
-    NORMAL_ASYNC: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow1>
-    >;
-    EFFECT_WRAPPED: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow2>
-    >;
-    BINDING_ROUNDTRIP: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow3>
-    >;
-    PAYLOAD_DECODING: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow4>
-    >;
-    STEP_CONTEXT: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow5>
-    >;
-    PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<
-      __SideffectWorkflowPayload<typeof __SideffectWorkflow6>
-    >;
+    ADD_NUMBERS: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow0>>;
+    NORMAL_ASYNC: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow1>>;
+    EFFECT_WRAPPED: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow2>>;
+    BINDING_ROUNDTRIP: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow3>>;
+    PAYLOAD_DECODING: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow4>>;
+    STEP_CONTEXT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow5>>;
+    PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow6>>;
   }
 
   namespace Cloudflare {
     interface Env {
-      ADD_NUMBERS: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow0>
-      >;
-      NORMAL_ASYNC: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow1>
-      >;
-      EFFECT_WRAPPED: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow2>
-      >;
-      BINDING_ROUNDTRIP: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow3>
-      >;
-      PAYLOAD_DECODING: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow4>
-      >;
-      STEP_CONTEXT: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow5>
-      >;
-      PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<
-        __SideffectWorkflowPayload<typeof __SideffectWorkflow6>
-      >;
+      ADD_NUMBERS: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow0>>;
+      NORMAL_ASYNC: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow1>>;
+      EFFECT_WRAPPED: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow2>>;
+      BINDING_ROUNDTRIP: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow3>>;
+      PAYLOAD_DECODING: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow4>>;
+      STEP_CONTEXT: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow5>>;
+      PAUSE_AND_RETURN: __SideffectCloudflareWorkflow<__SideffectWorkflowPayload<typeof __SideffectWorkflow6>>;
     }
   }
 }
