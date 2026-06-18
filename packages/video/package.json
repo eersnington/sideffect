@@ -1,0 +1,40 @@
+{
+  "name": "video",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Remotion promo video for sideffect",
+  "license": "Apache-2.0",
+  "repository": {},
+  "sideEffects": [
+    "*.css"
+  ],
+  "scripts": {
+    "dev": "remotionb studio",
+    "build": "remotionb bundle",
+    "render": "remotionb render src/index.ts SideffectPromo out/sideffect-promo.mp4",
+    "still": "remotionb still src/index.ts SideffectPromo out/sideffect-promo.png --frame=260",
+    "upgrade": "remotionb upgrade",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.477",
+    "@remotion/tailwind-v4": "4.0.477",
+    "@remotion/zod-types": "4.0.477",
+    "postprocessing": "^6.39.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "4.0.477",
+    "tailwindcss": "4.0.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "@remotion/google-fonts": "4.0.477",
+    "@types/node": "^25.6.2",
+    "@types/react": "19.2.7",
+    "@types/web": "0.0.166",
+    "@typescript/native-preview": "catalog:",
+    "bumpp": "^11.1.0",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
