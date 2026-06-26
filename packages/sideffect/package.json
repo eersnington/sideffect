@@ -30,8 +30,7 @@
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",
-    "prepublishOnly": "vp run build",
-    "prepare": "vp config"
+    "prepublishOnly": "vp run build"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.40.0",

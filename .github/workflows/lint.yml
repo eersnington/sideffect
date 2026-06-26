@@ -1,4 +1,4 @@
-name: Test
+name: Lint
 
 on:
   push:
@@ -23,8 +23,5 @@ jobs:
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      - name: Build packages
-        run: bun run build
-
-      - name: Test packages
-        run: bun run test
+      - name: Check
+        run: bun run check

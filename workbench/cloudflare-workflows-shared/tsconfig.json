@@ -5,6 +5,12 @@
     "types": ["@cloudflare/workers-types"],
     "module": "es2022",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "sideffect": ["../../packages/sideffect/src/index.ts"],
+      "sideffect/cloudflare": ["../../packages/sideffect/src/cloudflare.ts"],
+      "sideffect/vite": ["../../packages/sideffect/src/vite.ts"]
+    },
     "strict": true,
     "skipLibCheck": true,
     "isolatedModules": true,

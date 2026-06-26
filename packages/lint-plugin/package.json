@@ -1,0 +1,95 @@
+{
+  "name": "@sideffect/lint",
+  "version": "0.2.1",
+  "description": "ESLint and Oxlint rules for Sideffect and Cloudflare Workflows.",
+  "keywords": [
+    "cloudflare-workers",
+    "eslint",
+    "eslint-plugin",
+    "eslintplugin",
+    "oxlint",
+    "workflows"
+  ],
+  "homepage": "https://github.com/eersnington/sideffect#readme",
+  "bugs": {
+    "url": "https://github.com/eersnington/sideffect/issues"
+  },
+  "license": "Apache-2.0",
+  "author": "Eersnington",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eersnington/sideffect.git"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./eslint": {
+      "types": "./dist/eslint.d.mts",
+      "default": "./dist/eslint.mjs"
+    },
+    "./oxlint": {
+      "types": "./dist/oxlint.d.mts",
+      "default": "./dist/oxlint.mjs"
+    },
+    "./rules": {
+      "types": "./dist/rules/index.d.mts",
+      "default": "./dist/rules/index.mjs"
+    },
+    "./rules/await-step-calls": {
+      "types": "./dist/rules/await-step-calls.d.mts",
+      "default": "./dist/rules/await-step-calls.mjs"
+    },
+    "./rules/deterministic-step-names": {
+      "types": "./dist/rules/deterministic-step-names.d.mts",
+      "default": "./dist/rules/deterministic-step-names.mjs"
+    },
+    "./rules/max-step-timeout-30m": {
+      "types": "./dist/rules/max-step-timeout-30m.d.mts",
+      "default": "./dist/rules/max-step-timeout-30m.mjs"
+    },
+    "./rules/no-event-mutation": {
+      "types": "./dist/rules/no-event-mutation.d.mts",
+      "default": "./dist/rules/no-event-mutation.mjs"
+    },
+    "./rules/no-step-race-any-outside-step": {
+      "types": "./dist/rules/no-step-race-any-outside-step.d.mts",
+      "default": "./dist/rules/no-step-race-any-outside-step.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test",
+    "check": "vp check",
+    "prepublishOnly": "vp pack"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.2",
+    "eslint": "^9.39.4",
+    "oxlint": "^1.67.0",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "eslint": ">=9.0.0",
+    "oxlint": ">=1.67.0"
+  },
+  "peerDependenciesMeta": {
+    "eslint": {
+      "optional": true
+    },
+    "oxlint": {
+      "optional": true
+    }
+  }
+}
