@@ -1,7 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, extname, join, resolve } from "node:path";
 
-import ts from "typescript";
+import { Cause, Effect, Exit } from "effect";
+import type * as TypeScript from "typescript";
 
 import { validateWorkflowExportName } from "../entrypoints.ts";
 import type { WorkflowConfigEntry } from "../types.ts";
@@ -18,6 +20,46 @@ const sourceFileExtensions = new Set([
 ]);
 const declarationFileExtensions = [".d.ts", ".d.mts", ".d.cts"];
 const identifierName = /^[$A-Z_a-z][$\w]*$/;
+type TypeScriptModule = typeof TypeScript;
+
+class TypeScriptWorkflowDiscoveryError extends Error {
+  constructor(cause: unknown) {
+    super(
+      'Sideffect workflow discovery requires TypeScript\'s parser, but the optional peer dependency "typescript" could not be resolved. Install TypeScript in the project that uses `sideffect/vite`, for example `npm install -D typescript`. Runtime usage of `sideffect` and `sideffect/cloudflare` is unaffected.',
+      { cause },
+    );
+    this.name = "TypeScriptWorkflowDiscoveryError";
+  }
+}
+
+const require = createRequire(import.meta.url);
+let loadedTypeScript: TypeScriptModule | undefined;
+
+function loadTypeScript(): TypeScriptModule {
+  if (loadedTypeScript) {
+    return loadedTypeScript;
+  }
+
+  const loaded = Effect.runSyncExit(
+    Effect.try({
+      try: () => require("typescript") as TypeScriptModule,
+      catch: (cause) => new TypeScriptWorkflowDiscoveryError(cause),
+    }),
+  );
+
+  if (Exit.isSuccess(loaded)) {
+    loadedTypeScript = loaded.value;
+    return loaded.value;
+  }
+
+  throw Cause.squash(loaded.cause);
+}
+
+const ts = new Proxy({} as TypeScriptModule, {
+  get(_target, property) {
+    return loadTypeScript()[property as keyof TypeScriptModule];
+  },
+});
 
 /** Workflow source paths scanned for static `Workflow.make(...).toLayer(...)` exports. */
 export type WorkflowDiscoveryPaths = Array<string>;
@@ -407,7 +449,7 @@ function analyzeWorkflowSourceFile(
   return { exports, definitionExports, reExports };
 }
 
-function collectWorkflowBindings(sourceFile: ts.SourceFile): {
+function collectWorkflowBindings(sourceFile: TypeScript.SourceFile): {
   readonly names: Set<string>;
   readonly namespaces: Set<string>;
 } {
@@ -446,7 +488,7 @@ function collectWorkflowBindings(sourceFile: ts.SourceFile): {
 }
 
 function collectImportedWorkflowDefinitions(
-  sourceFile: ts.SourceFile,
+  sourceFile: TypeScript.SourceFile,
   filePath: string,
   visited: Set<string>,
 ): Map<string, string> {
@@ -470,7 +512,7 @@ function collectImportedWorkflowDefinitions(
   return definitions;
 }
 
-function collectLocalImports(sourceFile: ts.SourceFile): Array<LocalImportDeclaration> {
+function collectLocalImports(sourceFile: TypeScript.SourceFile): Array<LocalImportDeclaration> {
   return sourceFile.statements.flatMap((statement) => {
     if (
       !ts.isImportDeclaration(statement) ||
@@ -515,7 +557,7 @@ function collectLocalImports(sourceFile: ts.SourceFile): Array<LocalImportDeclar
 }
 
 function workflowNameFromLayerExpression(
-  expression: ts.Expression,
+  expression: TypeScript.Expression,
   workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
   workflowDefinitions: Map<string, string>,
 ): string | undefined {
@@ -538,7 +580,7 @@ function workflowNameFromLayerExpression(
 }
 
 function workflowNameFromMakeCall(
-  expression: ts.Expression,
+  expression: TypeScript.Expression,
   workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
 ): string | undefined {
   const call = skipOuterExpressions(expression);
@@ -595,8 +637,8 @@ function workflowNameFromMakeCall(
 }
 
 function exportSpecifierNames(
-  declaration: ts.ExportDeclaration,
-  exports: ts.NamedExports,
+  declaration: TypeScript.ExportDeclaration,
+  exports: TypeScript.NamedExports,
 ): Array<{ readonly imported: string; readonly exported: string }> {
   if (declaration.isTypeOnly) {
     return [];
@@ -626,7 +668,7 @@ function isLocalSpecifier(specifier: string): boolean {
   return specifier.startsWith(".") || specifier.startsWith("/");
 }
 
-function skipOuterExpressions(expression: ts.Expression): ts.Expression {
+function skipOuterExpressions(expression: TypeScript.Expression): TypeScript.Expression {
   let current = expression;
   while (
     ts.isParenthesizedExpression(current) ||
@@ -640,7 +682,7 @@ function skipOuterExpressions(expression: ts.Expression): ts.Expression {
   return current;
 }
 
-function scriptKindForFile(path: string): ts.ScriptKind {
+function scriptKindForFile(path: string): TypeScript.ScriptKind {
   switch (extname(path)) {
     case ".tsx":
       return ts.ScriptKind.TSX;

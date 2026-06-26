@@ -33,9 +33,6 @@
     "prepublishOnly": "vp run build",
     "prepare": "vp config"
   },
-  "dependencies": {
-    "typescript": ">=5.0.0 <7"
-  },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.40.0",
     "@cloudflare/workers-types": "4.20260605.1",
@@ -44,18 +41,23 @@
     "bumpp": "11.1.0",
     "defu": "6.1.7",
     "effect": "4.0.0-beta.78",
+    "typescript": "catalog:",
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
     "@cloudflare/vite-plugin": "^1.40.0",
     "@cloudflare/workers-types": ">=4.20260605.1",
-    "effect": ">=4.0.0-beta.75"
+    "effect": ">=4.0.0-beta.75",
+    "typescript": ">=5.0.0 <7"
   },
   "peerDependenciesMeta": {
     "@cloudflare/vite-plugin": {
       "optional": true
     },
     "@cloudflare/workers-types": {
+      "optional": true
+    },
+    "typescript": {
       "optional": true
     }
   },
