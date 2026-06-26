@@ -47,17 +47,13 @@
   "peerDependencies": {
     "@cloudflare/vite-plugin": "^1.40.0",
     "@cloudflare/workers-types": ">=4.20260605.1",
-    "effect": ">=4.0.0-beta.75",
-    "typescript": ">=5.0.0 <7"
+    "effect": ">=4.0.0-beta.75"
   },
   "peerDependenciesMeta": {
     "@cloudflare/vite-plugin": {
       "optional": true
     },
     "@cloudflare/workers-types": {
-      "optional": true
-    },
-    "typescript": {
       "optional": true
     }
   },

@@ -25,7 +25,7 @@ type TypeScriptModule = typeof TypeScript;
 class TypeScriptWorkflowDiscoveryError extends Error {
   constructor(cause: unknown) {
     super(
-      'Sideffect workflow discovery requires TypeScript\'s parser, but the optional peer dependency "typescript" could not be resolved. Install TypeScript in the project that uses `sideffect/vite`, for example `npm install -D typescript`. Runtime usage of `sideffect` and `sideffect/cloudflare` is unaffected.',
+      'Sideffect workflow discovery requires TypeScript\'s parser, but the "typescript" package could not be resolved. Install TypeScript in the project that uses `sideffect/vite`, for example `npm install -D typescript`. Runtime usage of `sideffect` and `sideffect/cloudflare` is unaffected.',
       { cause },
     );
     this.name = "TypeScriptWorkflowDiscoveryError";
