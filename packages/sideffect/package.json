@@ -27,6 +27,7 @@
   },
   "scripts": {
     "build": "vp pack",
+    "bench:workflow-overhead": "bun benchmarks/workflow-overhead.bench.ts",
     "dev": "vp pack --watch",
     "test": "vp test",
     "check": "vp check",

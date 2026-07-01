@@ -299,6 +299,26 @@ test("workflow engine accepts Effect workflow bodies and preserves catchTag", as
   ).rejects.toBeInstanceOf(NonRetryableError);
 });
 
+test("workflow engine accepts Effect step bodies", async () => {
+  const effectStep = Step.make("effect step", {
+    payload: Schema.Struct({ imageId: Schema.String }),
+    result: Schema.Struct({ id: Schema.String }),
+    run: ({ imageId }) => Effect.succeed({ id: imageId }),
+  });
+  const layer = imageWorkflow.toLayer(async (workflow, step) => {
+    return step.do(effectStep, { imageId: workflow.payload.imageId });
+  });
+
+  await expect(
+    WorkflowEngine.run(layer, {
+      env: {},
+      ctx: {},
+      event: fakeWorkflowEvent({ imageId: "img_123" }),
+      step: fakeNativeStep(),
+    }),
+  ).resolves.toEqual({ id: "img_123" });
+});
+
 test("step.do forwards Cloudflare retry and timeout options", async () => {
   const calls: Array<unknown> = [];
   const layer = imageWorkflow.toLayer(async (workflow, step) => {
@@ -507,6 +527,42 @@ test("rollback handlers receive context and forward rollback config", async () =
       }),
     },
   ]);
+});
+
+test("rollback handlers may return Effects", async () => {
+  const rollbacks: Array<string> = [];
+  const stepWithEffectRollback = Step.make("step with effect rollback", {
+    payload: Schema.String,
+    result: Schema.String,
+    run: (value) => value,
+  }).pipe(
+    Rollback.with((result) =>
+      Effect.sync(() => {
+        rollbacks.push(`rolled back:${result}`);
+      }),
+    ),
+  );
+  const layer = imageWorkflow.toLayer(async (_workflow, step) => {
+    return step.do(stepWithEffectRollback, "value");
+  });
+  const calls: Array<unknown> = [];
+
+  await WorkflowEngine.run(layer, {
+    env: {},
+    ctx: {},
+    event: fakeWorkflowEvent({ imageId: "img_123" }),
+    step: fakeNativeStep(calls),
+  });
+
+  const rollbackOptions = (calls[0] as Array<unknown>)[1] as {
+    readonly rollback: (context: {
+      readonly output: string;
+      readonly error: Error;
+    }) => Promise<void>;
+  };
+  await rollbackOptions.rollback({ output: "value", error: new Error("rollback") });
+
+  expect(rollbacks).toEqual(["rolled back:value"]);
 });
 
 test("sleep, sleepUntil, and waitForEvent delegate to native WorkflowStep", async () => {
