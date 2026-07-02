@@ -8,7 +8,14 @@ import {
   writeWorkflowEnvTypes,
   type CapturedWorkflow,
 } from "./vite/generated-entry.ts";
-import { collectWorkflowEntries, type WorkflowDiscoveryPaths } from "./vite/workflow-discovery.ts";
+import {
+  collectWorkflowEntriesForVite,
+  type WorkflowDiscoveryPaths,
+} from "./vite/workflow-discovery.ts";
+import {
+  formatParserSelection,
+  type WorkflowDiscoveryParserSelection,
+} from "./vite/workflow-discovery-parser.ts";
 import type { CloudflarePluginConfig, WorkerConfig } from "./vite/cloudflare-options.ts";
 import type { WorkflowConfigEntry } from "./types.ts";
 
@@ -52,6 +59,17 @@ export interface Plugin {
   configResolved?(config: { readonly root: string }): void;
   resolveId?(source: string): string | void;
   load?(this: ResolveContext, id: string): Promise<string | void> | string | void;
+}
+
+/** Minimal Vite logger shape used for parser-selection diagnostics. */
+interface ViteLogger {
+  readonly info?: (message: string) => void;
+}
+
+/** @internal Resolved Vite config shape used for deferred diagnostics. */
+interface ViteResolvedConfig {
+  readonly root: string;
+  readonly logger?: ViteLogger;
 }
 
 /** Sideffect Vite plugin plus the Cloudflare config object it forwards. */
@@ -122,6 +140,8 @@ export function createSideffectWorkflowsPlugin(
   const captured: { value?: CapturedWorkflowConfig } = {};
   let configRoot: string | undefined;
   let resolvedConfig: { readonly root: string } | undefined;
+  let logger: ViteLogger | undefined;
+  let pendingParserSelection: WorkflowDiscoveryParserSelection | undefined;
 
   const plugin: SideffectWorkflowsPlugin = {
     name: "sideffect:cloudflare-workflows",
@@ -153,7 +173,15 @@ export function createSideffectWorkflowsPlugin(
           typeof plugin.cloudflare.configPath === "string"
             ? dirname(resolve(root, plugin.cloudflare.configPath))
             : root;
-        const discoveredWorkflows = collectWorkflowEntries(workflowPaths, baseDirectory);
+        const discoveredWorkflows = collectWorkflowEntriesForVite(workflowPaths, baseDirectory, {
+          onParserSelected(selection) {
+            if (logParserSelection(logger, selection)) {
+              pendingParserSelection = undefined;
+            } else {
+              pendingParserSelection = selection;
+            }
+          },
+        });
         const discoveredByClassName = new Map(
           discoveredWorkflows.map((workflow) => [workflow.config.class_name, workflow]),
         );
@@ -198,8 +226,14 @@ export function createSideffectWorkflowsPlugin(
     config(config) {
       configRoot = resolve(config.root ?? process.cwd());
     },
-    configResolved(config) {
+    configResolved(config: ViteResolvedConfig) {
       resolvedConfig = config;
+      logger = config.logger;
+      if (pendingParserSelection) {
+        if (logParserSelection(logger, pendingParserSelection)) {
+          pendingParserSelection = undefined;
+        }
+      }
     },
     resolveId(source) {
       if (source !== virtualEntry) {
@@ -258,4 +292,15 @@ export function createSideffectWorkflowsPlugin(
   };
 
   return plugin;
+}
+
+function logParserSelection(
+  logger: ViteLogger | undefined,
+  selection: WorkflowDiscoveryParserSelection,
+): boolean {
+  if (!logger?.info) {
+    return false;
+  }
+  logger.info(`[sideffect] workflow discovery parser: ${formatParserSelection(selection)}`);
+  return true;
 }

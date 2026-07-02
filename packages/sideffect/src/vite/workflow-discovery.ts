@@ -1,14 +1,28 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { createRequire } from "node:module";
+/**
+ * Orchestrates one workflow-discovery run over local source modules.
+ *
+ * Per-run caches retain only complete traversal results, while branch-local
+ * ancestor sets cut cycles. Expected parser and I/O failures stay typed until
+ * this module renders them at the synchronous public/Vite boundary.
+ */
+import { readdirSync, statSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 
-import { Cause, Effect, Exit } from "effect";
-import type * as TypeScript from "typescript";
+import { Effect, Schema } from "effect";
 
 import { validateWorkflowExportName } from "../entrypoints.ts";
 import type { WorkflowConfigEntry } from "../types.ts";
+import {
+  type DiscoveredWorkflowExport,
+  makeWorkflowDiscoveryParser,
+  parseWorkflowSourceFile,
+  type ParsedWorkflowSourceFile,
+  type WorkflowDiscoveryParserSelection,
+  type WorkflowDiscoveryParser,
+  type WorkflowParserFailure,
+} from "./workflow-discovery-parser.ts";
 
-const sourceFileExtensions = new Set([
+const sourceFileExtensionOrder = [
   ".ts",
   ".tsx",
   ".mts",
@@ -17,49 +31,9 @@ const sourceFileExtensions = new Set([
   ".jsx",
   ".mjs",
   ".cjs",
-]);
+] as const;
+const sourceFileExtensions = new Set<string>(sourceFileExtensionOrder);
 const declarationFileExtensions = [".d.ts", ".d.mts", ".d.cts"];
-const identifierName = /^[$A-Z_a-z][$\w]*$/;
-type TypeScriptModule = typeof TypeScript;
-
-class TypeScriptWorkflowDiscoveryError extends Error {
-  constructor(cause: unknown) {
-    super(
-      'Sideffect workflow discovery requires TypeScript\'s parser, but the "typescript" package could not be resolved. Install TypeScript in the project that uses `sideffect/vite`, for example `npm install -D typescript`. Runtime usage of `sideffect` and `sideffect/cloudflare` is unaffected.',
-      { cause },
-    );
-    this.name = "TypeScriptWorkflowDiscoveryError";
-  }
-}
-
-const require = createRequire(import.meta.url);
-let loadedTypeScript: TypeScriptModule | undefined;
-
-function loadTypeScript(): TypeScriptModule {
-  if (loadedTypeScript) {
-    return loadedTypeScript;
-  }
-
-  const loaded = Effect.runSyncExit(
-    Effect.try({
-      try: () => require("typescript") as TypeScriptModule,
-      catch: (cause) => new TypeScriptWorkflowDiscoveryError(cause),
-    }),
-  );
-
-  if (Exit.isSuccess(loaded)) {
-    loadedTypeScript = loaded.value;
-    return loaded.value;
-  }
-
-  throw Cause.squash(loaded.cause);
-}
-
-const ts = new Proxy({} as TypeScriptModule, {
-  get(_target, property) {
-    return loadTypeScript()[property as keyof TypeScriptModule];
-  },
-});
 
 /** Workflow source paths scanned for static `Workflow.make(...).toLayer(...)` exports. */
 export type WorkflowDiscoveryPaths = Array<string>;
@@ -90,26 +64,42 @@ export interface CapturedSideffectWorkflow {
   readonly layer: WorkflowLayerImport;
 }
 
-/** @internal Static workflow export discovered by TypeScript AST traversal. */
-type DiscoveredWorkflowExport = WorkflowLayerImport & {
-  /** Cloudflare Workflow name from `Workflow.make({ name })`. */
-  readonly workflowName: string;
-};
-
-/** @internal Local re-export shape followed by workflow discovery. */
-type ReExportDeclaration =
-  | {
-      readonly kind: "named";
-      readonly specifier: string;
-      readonly exports: Array<{ readonly imported: string; readonly exported: string }>;
-    }
-  | { readonly kind: "all"; readonly specifier: string };
-
-/** @internal Local import bindings that may reference exported workflow definitions. */
-interface LocalImportDeclaration {
-  readonly specifier: string;
-  readonly imports: Array<{ readonly imported: string; readonly local: string }>;
+/** @internal Optional diagnostics used by Vite integration. */
+export interface WorkflowDiscoveryDiagnostics {
+  readonly onParserSelected?: (selection: WorkflowDiscoveryParserSelection) => void;
 }
+
+interface CollectWorkflowEntriesInput {
+  readonly patterns: WorkflowDiscoveryPaths | string;
+  readonly baseDirectory: string;
+  readonly diagnostics?: WorkflowDiscoveryDiagnostics;
+  readonly parser?: WorkflowDiscoveryParser;
+}
+
+interface WorkflowTraversal {
+  readonly parser: WorkflowDiscoveryParser;
+  readonly parsedSources: Map<string, ParsedWorkflowSourceFile>;
+  readonly workflowExports: Map<string, ReadonlyMap<string, DiscoveredWorkflowExport>>;
+  readonly workflowDefinitionExports: Map<string, ReadonlyMap<string, string>>;
+}
+
+interface WorkflowTraversalResult<Value> {
+  readonly values: ReadonlyMap<string, Value>;
+  /** An ancestor edge was omitted, so this path-dependent result must not be cached. */
+  readonly cycleCut: boolean;
+}
+
+/** @internal Expected failure while resolving a local workflow re-export. */
+export class WorkflowReExportResolveFailed extends Schema.TaggedErrorClass<WorkflowReExportResolveFailed>()(
+  "WorkflowReExportResolveFailed",
+  {
+    filePath: Schema.String,
+    specifier: Schema.String,
+  },
+) {}
+
+/** @internal Expected workflow discovery failures. */
+export type WorkflowDiscoveryFailure = WorkflowParserFailure | WorkflowReExportResolveFailed;
 
 /**
  * Discovers static Sideffect workflow layer exports under the configured paths.
@@ -122,42 +112,84 @@ export function collectWorkflowEntries(
   patterns: WorkflowDiscoveryPaths | string = ["src/workflows"],
   baseDirectory: string = process.cwd(),
 ): Array<CapturedSideffectWorkflow> {
-  const roots = Array.isArray(patterns) ? patterns : [patterns];
+  return runWorkflowDiscovery({ patterns, baseDirectory });
+}
+
+/** @internal Vite-facing discovery API with parser-selection diagnostics. */
+export function collectWorkflowEntriesForVite(
+  patterns: WorkflowDiscoveryPaths | string = ["src/workflows"],
+  baseDirectory: string = process.cwd(),
+  diagnostics: WorkflowDiscoveryDiagnostics = {},
+): Array<CapturedSideffectWorkflow> {
+  return runWorkflowDiscovery({ patterns, baseDirectory, diagnostics });
+}
+
+/** @internal Discovers workflow entries with an explicit parser adapter. */
+export function collectWorkflowEntriesWithParser(
+  patterns: WorkflowDiscoveryPaths | string,
+  baseDirectory: string,
+  parser: WorkflowDiscoveryParser,
+): Array<CapturedSideffectWorkflow> {
+  return runWorkflowDiscovery({ patterns, baseDirectory, parser });
+}
+
+function runWorkflowDiscovery(
+  input: CollectWorkflowEntriesInput,
+): Array<CapturedSideffectWorkflow> {
+  const result = Effect.runSync(
+    collectWorkflowEntriesEffect(input).pipe(
+      Effect.match({
+        onFailure: (error) => ({ _tag: "Failure", error }) as const,
+        onSuccess: (workflows) => ({ _tag: "Success", workflows }) as const,
+      }),
+    ),
+  );
+
+  if (result._tag === "Failure") {
+    throw renderWorkflowDiscoveryError(result.error);
+  }
+
+  return result.workflows;
+}
+
+const collectWorkflowEntriesEffect = Effect.fnUntraced(function* (
+  input: CollectWorkflowEntriesInput,
+): Effect.fn.Return<Array<CapturedSideffectWorkflow>, WorkflowDiscoveryFailure> {
+  const files = workflowSourceFiles(input.patterns, input.baseDirectory);
+  if (files.length === 0) {
+    return [];
+  }
+
+  const parser = input.parser ?? (yield* makeWorkflowDiscoveryParser);
+  input.diagnostics?.onParserSelected?.(parser.selection);
+  const traversal: WorkflowTraversal = {
+    parser,
+    parsedSources: new Map(),
+    workflowExports: new Map(),
+    workflowDefinitionExports: new Map(),
+  };
+
   const byClassName = new Map<string, CapturedSideffectWorkflow>();
-
-  for (const pattern of roots) {
-    const root = resolve(baseDirectory, pattern.replace(/\*.*$/, ""));
-    for (const filePath of sourceFiles(root)) {
-      for (const workflow of collectWorkflowExportsFromFile(filePath, new Set()).values()) {
-        const className = workflow.workflowName
-          .split(/[^A-Z_a-z0-9]+/)
-          .filter(Boolean)
-          .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
-          .join("");
-        validateWorkflowExportName(className);
-
-        const modulePath = workflow.modulePath.replace(/\\/g, "/");
-        byClassName.set(className, {
-          kind: "sideffect",
-          config: {
-            binding: workflow.workflowName
-              .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
-              .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
-              .replace(/[^A-Z_a-z0-9]+/g, "_")
-              .toUpperCase(),
-            name: workflow.workflowName,
-            class_name: className,
-          },
-          layer:
-            workflow.exportKind === "default"
-              ? { modulePath, exportKind: "default", exportName: "default" }
-              : { modulePath, exportKind: "named", exportName: workflow.exportName },
-        });
-      }
+  for (const filePath of files) {
+    const result = yield* collectWorkflowExportsFromFile(filePath, new Set(), traversal);
+    for (const workflow of result.values.values()) {
+      const captured = captureDiscoveredWorkflow(workflow);
+      byClassName.set(captured.config.class_name, captured);
     }
   }
 
   return [...byClassName.values()];
+});
+
+function workflowSourceFiles(
+  patterns: WorkflowDiscoveryPaths | string,
+  baseDirectory: string,
+): Array<string> {
+  const roots = Array.isArray(patterns) ? patterns : [patterns];
+  return roots.flatMap((pattern) => {
+    const root = resolve(baseDirectory, pattern.replace(/\*.*$/, ""));
+    return sourceFiles(root);
+  });
 }
 
 function sourceFiles(path: string): Array<string> {
@@ -181,11 +213,7 @@ function sourceFiles(path: string): Array<string> {
       if (entry.isDirectory()) {
         return sourceFiles(child);
       }
-      if (
-        entry.isFile() &&
-        sourceFileExtensions.has(extname(child)) &&
-        !declarationFileExtensions.some((extension) => child.endsWith(extension))
-      ) {
+      if (entry.isFile() && isSourceFile(child)) {
         return [child];
       }
       return [];
@@ -201,521 +229,293 @@ function isSourceFile(path: string): boolean {
 
 function collectWorkflowExportsFromFile(
   filePath: string,
-  visited: Set<string>,
-): Map<string, DiscoveredWorkflowExport> {
-  if (visited.has(filePath)) {
-    return new Map();
-  }
-  visited.add(filePath);
-
-  const analysis = analyzeWorkflowSourceFile(filePath, new Set());
-  const exports = new Map(analysis.exports);
-
-  for (const reExport of analysis.reExports) {
-    if (!isLocalSpecifier(reExport.specifier)) {
-      continue;
+  ancestors: ReadonlySet<string>,
+  traversal: WorkflowTraversal,
+): Effect.Effect<WorkflowTraversalResult<DiscoveredWorkflowExport>, WorkflowDiscoveryFailure> {
+  return Effect.gen(function* () {
+    const cached = traversal.workflowExports.get(filePath);
+    if (cached) {
+      return { values: cached, cycleCut: false };
     }
+    if (ancestors.has(filePath)) {
+      return { values: new Map<string, DiscoveredWorkflowExport>(), cycleCut: true };
+    }
+    const nextAncestors = new Set(ancestors).add(filePath);
 
-    const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
-    if (!resolved) {
-      throw new Error(
-        `Sideffect could not resolve workflow re-export module "${reExport.specifier}" from "${filePath}" while generating Cloudflare workflow bindings.`,
+    const moduleWithLocalDefinitions = yield* parseWorkflowSourceWithoutImportedDefinitions(
+      filePath,
+      traversal,
+    );
+    const importedDefinitions = yield* collectImportedWorkflowDefinitions(
+      moduleWithLocalDefinitions,
+      filePath,
+      new Set(),
+      traversal,
+    );
+    const module =
+      importedDefinitions.values.size === 0
+        ? moduleWithLocalDefinitions
+        : yield* parseWorkflowSourceFile(traversal.parser, filePath, importedDefinitions.values);
+    const exports = new Map(module.exports);
+    let cycleCut = importedDefinitions.cycleCut;
+
+    for (const reExport of module.reExports) {
+      if (!isLocalSpecifier(reExport.specifier)) {
+        continue;
+      }
+
+      const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
+      if (!resolved) {
+        return yield* new WorkflowReExportResolveFailed({
+          filePath,
+          specifier: reExport.specifier,
+        });
+      }
+
+      const targetExports = yield* collectWorkflowExportsFromFile(
+        resolved,
+        nextAncestors,
+        traversal,
       );
-    }
+      cycleCut ||= targetExports.cycleCut;
+      if (reExport.kind === "all") {
+        for (const [exportName, workflow] of targetExports.values) {
+          if (exportName !== "default") {
+            exports.set(exportName, workflow);
+          }
+        }
+        continue;
+      }
 
-    const targetExports = collectWorkflowExportsFromFile(resolved, visited);
-    if (reExport.kind === "all") {
-      for (const [exportName, workflow] of targetExports) {
-        if (exportName !== "default") {
-          exports.set(exportName, workflow);
+      for (const exportEntry of reExport.exports) {
+        const workflow = targetExports.values.get(exportEntry.imported);
+        if (workflow) {
+          exports.set(exportEntry.exported, workflow);
         }
       }
-      continue;
     }
 
-    for (const exportEntry of reExport.exports) {
-      const workflow = targetExports.get(exportEntry.imported);
-      if (workflow) {
-        exports.set(exportEntry.exported, workflow);
-      }
+    if (!cycleCut) {
+      traversal.workflowExports.set(filePath, exports);
     }
-  }
-
-  return exports;
+    return { values: exports, cycleCut };
+  });
 }
 
 function collectWorkflowDefinitionExportsFromFile(
   filePath: string,
-  visited: Set<string>,
-): Map<string, string> {
-  if (visited.has(filePath)) {
-    return new Map();
-  }
-  visited.add(filePath);
-
-  const analysis = analyzeWorkflowSourceFile(filePath, visited);
-  const exports = new Map(analysis.definitionExports);
-
-  for (const reExport of analysis.reExports) {
-    if (!isLocalSpecifier(reExport.specifier)) {
-      continue;
+  ancestors: ReadonlySet<string>,
+  traversal: WorkflowTraversal,
+): Effect.Effect<WorkflowTraversalResult<string>, WorkflowDiscoveryFailure> {
+  return Effect.gen(function* () {
+    const cached = traversal.workflowDefinitionExports.get(filePath);
+    if (cached) {
+      return { values: cached, cycleCut: false };
     }
-
-    const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
-    if (!resolved) {
-      continue;
+    if (ancestors.has(filePath)) {
+      return { values: new Map<string, string>(), cycleCut: true };
     }
+    const nextAncestors = new Set(ancestors).add(filePath);
 
-    const targetExports = collectWorkflowDefinitionExportsFromFile(resolved, visited);
-    if (reExport.kind === "all") {
-      for (const [exportName, workflowName] of targetExports) {
-        if (exportName !== "default") {
-          exports.set(exportName, workflowName);
-        }
+    const moduleWithLocalDefinitions = yield* parseWorkflowSourceWithoutImportedDefinitions(
+      filePath,
+      traversal,
+    );
+    const importedDefinitions = yield* collectImportedWorkflowDefinitions(
+      moduleWithLocalDefinitions,
+      filePath,
+      nextAncestors,
+      traversal,
+    );
+    const module =
+      importedDefinitions.values.size === 0
+        ? moduleWithLocalDefinitions
+        : yield* parseWorkflowSourceFile(traversal.parser, filePath, importedDefinitions.values);
+    const exports = new Map(module.definitionExports);
+    let cycleCut = importedDefinitions.cycleCut;
+
+    for (const reExport of module.reExports) {
+      if (!isLocalSpecifier(reExport.specifier)) {
+        continue;
       }
-      continue;
-    }
 
-    for (const exportEntry of reExport.exports) {
-      const workflowName = targetExports.get(exportEntry.imported);
-      if (workflowName) {
-        exports.set(exportEntry.exported, workflowName);
+      const resolved = resolveSourceFile(dirname(filePath), reExport.specifier);
+      if (!resolved) {
+        continue;
       }
-    }
-  }
 
-  return exports;
-}
-
-function analyzeWorkflowSourceFile(
-  filePath: string,
-  definitionVisited: Set<string>,
-): {
-  readonly exports: Map<string, DiscoveredWorkflowExport>;
-  readonly definitionExports: Map<string, string>;
-  readonly reExports: Array<ReExportDeclaration>;
-} {
-  const source = readFileSync(filePath, "utf8");
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    scriptKindForFile(filePath),
-  );
-  const workflowBindings = collectWorkflowBindings(sourceFile);
-  const workflowDefinitions = new Map<string, string>();
-  const workflowLayers = new Map<string, string>();
-  const exports = new Map<string, DiscoveredWorkflowExport>();
-  const definitionExports = new Map<string, string>();
-  const reExports: Array<ReExportDeclaration> = [];
-
-  for (const [name, workflowName] of collectImportedWorkflowDefinitions(
-    sourceFile,
-    filePath,
-    definitionVisited,
-  )) {
-    workflowDefinitions.set(name, workflowName);
-  }
-
-  for (const statement of sourceFile.statements) {
-    if (ts.isVariableStatement(statement)) {
-      const exported =
-        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) ??
-        false;
-
-      for (const declaration of statement.declarationList.declarations) {
-        if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
-          continue;
-        }
-
-        const name = declaration.name.text;
-        const workflowName = workflowNameFromMakeCall(declaration.initializer, workflowBindings);
-        if (workflowName) {
-          workflowDefinitions.set(name, workflowName);
-          if (exported) {
-            definitionExports.set(name, workflowName);
+      const targetExports = yield* collectWorkflowDefinitionExportsFromFile(
+        resolved,
+        nextAncestors,
+        traversal,
+      );
+      cycleCut ||= targetExports.cycleCut;
+      if (reExport.kind === "all") {
+        for (const [exportName, workflowName] of targetExports.values) {
+          if (exportName !== "default") {
+            exports.set(exportName, workflowName);
           }
-          continue;
         }
-
-        const layerWorkflowName = workflowNameFromLayerExpression(
-          declaration.initializer,
-          workflowBindings,
-          workflowDefinitions,
-        );
-        if (!layerWorkflowName) {
-          continue;
-        }
-
-        workflowLayers.set(name, layerWorkflowName);
-        if (exported) {
-          exports.set(name, {
-            workflowName: layerWorkflowName,
-            modulePath: filePath,
-            exportKind: "named",
-            exportName: name,
-          });
-        }
-      }
-      continue;
-    }
-
-    if (ts.isExportAssignment(statement)) {
-      if (statement.isExportEquals) {
         continue;
       }
 
-      const expression = skipOuterExpressions(statement.expression);
-      const layerWorkflowName =
-        workflowNameFromLayerExpression(expression, workflowBindings, workflowDefinitions) ??
-        (ts.isIdentifier(expression) ? workflowLayers.get(expression.text) : undefined);
-      if (layerWorkflowName) {
-        exports.set("default", {
-          workflowName: layerWorkflowName,
-          modulePath: filePath,
-          exportKind: "default",
-          exportName: "default",
-        });
-        continue;
-      }
-
-      const workflowName = ts.isIdentifier(expression)
-        ? workflowDefinitions.get(expression.text)
-        : workflowNameFromMakeCall(expression, workflowBindings);
-      if (workflowName) {
-        definitionExports.set("default", workflowName);
-      }
-      continue;
-    }
-
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-
-    const specifier =
-      statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-    if (specifier) {
-      const exportClause = statement.exportClause;
-      if (!exportClause) {
-        reExports.push({ kind: "all", specifier });
-      } else if (ts.isNamedExports(exportClause)) {
-        const namedExports = exportSpecifierNames(statement, exportClause);
-        if (namedExports.length > 0) {
-          reExports.push({ kind: "named", specifier, exports: namedExports });
+      for (const exportEntry of reExport.exports) {
+        const workflowName = targetExports.values.get(exportEntry.imported);
+        if (workflowName) {
+          exports.set(exportEntry.exported, workflowName);
         }
       }
-      continue;
     }
 
-    if (
-      statement.isTypeOnly ||
-      !statement.exportClause ||
-      !ts.isNamedExports(statement.exportClause)
-    ) {
-      continue;
+    if (!cycleCut) {
+      traversal.workflowDefinitionExports.set(filePath, exports);
     }
-
-    for (const exportEntry of exportSpecifierNames(statement, statement.exportClause)) {
-      const workflowName = workflowLayers.get(exportEntry.imported);
-      if (workflowName) {
-        exports.set(
-          exportEntry.exported,
-          exportEntry.exported === "default"
-            ? {
-                workflowName,
-                modulePath: filePath,
-                exportKind: "default",
-                exportName: "default",
-              }
-            : {
-                workflowName,
-                modulePath: filePath,
-                exportKind: "named",
-                exportName: exportEntry.exported,
-              },
-        );
-      }
-
-      const definitionWorkflowName = workflowDefinitions.get(exportEntry.imported);
-      if (definitionWorkflowName) {
-        definitionExports.set(exportEntry.exported, definitionWorkflowName);
-      }
-    }
-  }
-
-  return { exports, definitionExports, reExports };
-}
-
-function collectWorkflowBindings(sourceFile: TypeScript.SourceFile): {
-  readonly names: Set<string>;
-  readonly namespaces: Set<string>;
-} {
-  const names = new Set(["Workflow"]);
-  const namespaces = new Set<string>();
-
-  for (const statement of sourceFile.statements) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      !statement.moduleSpecifier ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== "sideffect"
-    ) {
-      continue;
-    }
-
-    const namedBindings = statement.importClause?.namedBindings;
-    if (!namedBindings) {
-      continue;
-    }
-
-    if (ts.isNamespaceImport(namedBindings)) {
-      namespaces.add(namedBindings.name.text);
-      continue;
-    }
-
-    for (const element of namedBindings.elements) {
-      const imported = element.propertyName?.text ?? element.name.text;
-      if (imported === "Workflow") {
-        names.add(element.name.text);
-      }
-    }
-  }
-
-  return { names, namespaces };
+    return { values: exports, cycleCut };
+  });
 }
 
 function collectImportedWorkflowDefinitions(
-  sourceFile: TypeScript.SourceFile,
+  module: ParsedWorkflowSourceFile,
   filePath: string,
-  visited: Set<string>,
-): Map<string, string> {
-  const definitions = new Map<string, string>();
+  ancestors: ReadonlySet<string>,
+  traversal: WorkflowTraversal,
+): Effect.Effect<WorkflowTraversalResult<string>, WorkflowDiscoveryFailure> {
+  return Effect.gen(function* () {
+    const definitions = new Map<string, string>();
+    let cycleCut = false;
 
-  for (const importDeclaration of collectLocalImports(sourceFile)) {
-    const resolved = resolveSourceFile(dirname(filePath), importDeclaration.specifier);
-    if (!resolved) {
-      continue;
-    }
-
-    const targetDefinitions = collectWorkflowDefinitionExportsFromFile(resolved, visited);
-    for (const importEntry of importDeclaration.imports) {
-      const workflowName = targetDefinitions.get(importEntry.imported);
-      if (workflowName) {
-        definitions.set(importEntry.local, workflowName);
-      }
-    }
-  }
-
-  return definitions;
-}
-
-function collectLocalImports(sourceFile: TypeScript.SourceFile): Array<LocalImportDeclaration> {
-  return sourceFile.statements.flatMap((statement) => {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      statement.importClause?.isTypeOnly ||
-      !statement.moduleSpecifier ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      !isLocalSpecifier(statement.moduleSpecifier.text)
-    ) {
-      return [];
-    }
-
-    const imports: Array<{ readonly imported: string; readonly local: string }> = [];
-    const importClause = statement.importClause;
-    if (!importClause) {
-      return [];
-    }
-
-    if (importClause.name && identifierName.test(importClause.name.text)) {
-      imports.push({ imported: "default", local: importClause.name.text });
-    }
-
-    const namedBindings = importClause.namedBindings;
-    if (!namedBindings || ts.isNamespaceImport(namedBindings)) {
-      return imports.length > 0 ? [{ specifier: statement.moduleSpecifier.text, imports }] : [];
-    }
-
-    for (const element of namedBindings.elements) {
-      if (element.isTypeOnly) {
+    for (const importDeclaration of module.imports) {
+      const resolved = resolveSourceFile(dirname(filePath), importDeclaration.specifier);
+      if (!resolved) {
         continue;
       }
 
-      const importedName = element.propertyName ?? element.name;
-      const imported = ts.isIdentifier(importedName) ? importedName.text : undefined;
-      const local = element.name.text;
-      if (imported && identifierName.test(imported) && identifierName.test(local)) {
-        imports.push({ imported, local });
+      const targetDefinitions = yield* collectWorkflowDefinitionExportsFromFile(
+        resolved,
+        ancestors,
+        traversal,
+      );
+      cycleCut ||= targetDefinitions.cycleCut;
+      for (const importEntry of importDeclaration.imports) {
+        const workflowName = targetDefinitions.values.get(importEntry.imported);
+        if (workflowName) {
+          definitions.set(importEntry.local, workflowName);
+        }
       }
     }
 
-    return imports.length > 0 ? [{ specifier: statement.moduleSpecifier.text, imports }] : [];
+    return { values: definitions, cycleCut };
   });
 }
 
-function workflowNameFromLayerExpression(
-  expression: TypeScript.Expression,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-  workflowDefinitions: Map<string, string>,
-): string | undefined {
-  const call = skipOuterExpressions(expression);
-  if (!ts.isCallExpression(call)) {
-    return;
-  }
-
-  const callee = skipOuterExpressions(call.expression);
-  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "toLayer") {
-    return;
-  }
-
-  const receiver = skipOuterExpressions(callee.expression);
-  if (ts.isIdentifier(receiver)) {
-    return workflowDefinitions.get(receiver.text);
-  }
-
-  return workflowNameFromMakeCall(receiver, workflowBindings);
-}
-
-function workflowNameFromMakeCall(
-  expression: TypeScript.Expression,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-): string | undefined {
-  const call = skipOuterExpressions(expression);
-  if (!ts.isCallExpression(call)) {
-    return;
-  }
-
-  const callee = skipOuterExpressions(call.expression);
-  if (!ts.isPropertyAccessExpression(callee) || callee.name.text !== "make") {
-    return;
-  }
-
-  const receiver = skipOuterExpressions(callee.expression);
-  const isWorkflowMake = ts.isIdentifier(receiver)
-    ? workflowBindings.names.has(receiver.text)
-    : ts.isPropertyAccessExpression(receiver) &&
-      receiver.name.text === "Workflow" &&
-      ts.isIdentifier(receiver.expression) &&
-      workflowBindings.namespaces.has(receiver.expression.text);
-  if (!isWorkflowMake) {
-    return;
-  }
-
-  const options = call.arguments[0];
-  if (!options) {
-    return;
-  }
-
-  const object = skipOuterExpressions(options);
-  if (!ts.isObjectLiteralExpression(object)) {
-    return;
-  }
-
-  for (const property of object.properties) {
-    if (!ts.isPropertyAssignment(property)) {
-      continue;
+function parseWorkflowSourceWithoutImportedDefinitions(
+  filePath: string,
+  traversal: WorkflowTraversal,
+): Effect.Effect<ParsedWorkflowSourceFile, WorkflowParserFailure> {
+  return Effect.gen(function* () {
+    const cached = traversal.parsedSources.get(filePath);
+    if (cached) {
+      return cached;
     }
 
-    const name = property.name;
-    if (
-      !(
-        (ts.isIdentifier(name) && name.text === "name") ||
-        (ts.isStringLiteral(name) && name.text === "name")
-      )
-    ) {
-      continue;
-    }
-
-    const value = skipOuterExpressions(property.initializer);
-    if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
-      return value.text;
-    }
-  }
-}
-
-function exportSpecifierNames(
-  declaration: TypeScript.ExportDeclaration,
-  exports: TypeScript.NamedExports,
-): Array<{ readonly imported: string; readonly exported: string }> {
-  if (declaration.isTypeOnly) {
-    return [];
-  }
-
-  return exports.elements.flatMap((element) => {
-    if (element.isTypeOnly) {
-      return [];
-    }
-
-    const importedName = element.propertyName ?? element.name;
-    const exportedName = element.name;
-    const imported =
-      ts.isIdentifier(importedName) && identifierName.test(importedName.text)
-        ? importedName.text
-        : undefined;
-    const exported =
-      ts.isIdentifier(exportedName) && identifierName.test(exportedName.text)
-        ? exportedName.text
-        : undefined;
-
-    return imported && exported ? [{ imported, exported }] : [];
+    const parsed = yield* parseWorkflowSourceFile(traversal.parser, filePath, new Map());
+    traversal.parsedSources.set(filePath, parsed);
+    return parsed;
   });
+}
+
+function captureDiscoveredWorkflow(workflow: DiscoveredWorkflowExport): CapturedSideffectWorkflow {
+  const className = workflow.workflowName
+    .split(/[^A-Z_a-z0-9]+/)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join("");
+  validateWorkflowExportName(className);
+
+  const modulePath = workflow.modulePath.replace(/\\/g, "/");
+  return {
+    kind: "sideffect",
+    config: {
+      binding: workflow.workflowName
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
+        .replace(/[^A-Z_a-z0-9]+/g, "_")
+        .toUpperCase(),
+      name: workflow.workflowName,
+      class_name: className,
+    },
+    layer:
+      workflow.exportKind === "default"
+        ? { modulePath, exportKind: "default", exportName: "default" }
+        : { modulePath, exportKind: "named", exportName: workflow.exportName },
+  };
+}
+
+function renderWorkflowDiscoveryError(error: WorkflowDiscoveryFailure): Error {
+  switch (error._tag) {
+    case "WorkflowParserUnavailable":
+      return new Error(
+        "Sideffect could not load oxc-parser for workflow discovery, so workflow config generation cannot continue. No workflow config was written. Reinstall dependencies, clear node_modules and the lockfile if needed, then rerun your package manager install.",
+        { cause: error.cause },
+      );
+    case "WorkflowParserInvocationFailed":
+      return new Error(
+        `Sideffect could not invoke oxc-parser for workflow source "${error.filePath}" while generating Cloudflare workflow bindings. No workflow config was written. Verify that oxc-parser supports the current runtime, reinstall dependencies, then rerun the build.`,
+        { cause: error.cause },
+      );
+    case "WorkflowSourceReadFailed":
+      return new Error(
+        `Sideffect could not read workflow source "${error.filePath}" while generating Cloudflare workflow bindings. No workflow config was written. Check that the file is readable, then rerun the build.`,
+        { cause: error.cause },
+      );
+    case "WorkflowSourceParseFailed":
+      return new Error(
+        `Sideffect could not parse workflow source "${error.filePath}" with oxc-parser while generating Cloudflare workflow bindings. No workflow config was written. Fix the syntax error, then rerun the build. Parser message: ${error.message}`,
+      );
+    case "WorkflowReExportResolveFailed":
+      return new Error(
+        `Sideffect could not resolve workflow re-export module "${error.specifier}" from "${error.filePath}" while generating Cloudflare workflow bindings. No workflow config was written. Check the local import path or export the workflow layer directly.`,
+      );
+  }
 }
 
 function isLocalSpecifier(specifier: string): boolean {
   return specifier.startsWith(".") || specifier.startsWith("/");
 }
 
-function skipOuterExpressions(expression: TypeScript.Expression): TypeScript.Expression {
-  let current = expression;
-  while (
-    ts.isParenthesizedExpression(current) ||
-    ts.isAsExpression(current) ||
-    ts.isSatisfiesExpression(current) ||
-    ts.isNonNullExpression(current) ||
-    ts.isTypeAssertionExpression(current)
-  ) {
-    current = current.expression;
-  }
-  return current;
-}
-
-function scriptKindForFile(path: string): TypeScript.ScriptKind {
-  switch (extname(path)) {
-    case ".tsx":
-      return ts.ScriptKind.TSX;
-    case ".jsx":
-      return ts.ScriptKind.JSX;
-    case ".js":
-    case ".mjs":
-    case ".cjs":
-      return ts.ScriptKind.JS;
-    case ".ts":
-    case ".mts":
-    case ".cts":
-      return ts.ScriptKind.TS;
-    default:
-      return ts.ScriptKind.Unknown;
-  }
-}
-
 function resolveSourceFile(baseDirectory: string, specifier: string): string | undefined {
   const basePath = resolve(baseDirectory, specifier);
-  const candidates = extname(basePath)
-    ? [basePath]
-    : [
-        basePath,
-        `${basePath}.ts`,
-        `${basePath}.tsx`,
-        `${basePath}.js`,
-        `${basePath}.jsx`,
-        join(basePath, "index.ts"),
-        join(basePath, "index.tsx"),
-        join(basePath, "index.js"),
-        join(basePath, "index.jsx"),
-      ];
+  const extension = extname(basePath);
+  const hasExplicitSourceExtension = extension.length > 0 && sourceFileExtensions.has(extension);
+  const fileCandidates = hasExplicitSourceExtension
+    ? [basePath, ...typeScriptSourceCandidates(basePath, extension)]
+    : sourceFileExtensionOrder.map((sourceExtension) => `${basePath}${sourceExtension}`);
+  const indexCandidates = hasExplicitSourceExtension
+    ? []
+    : sourceFileExtensionOrder.map((sourceExtension) => join(basePath, `index${sourceExtension}`));
 
-  return candidates.find((candidate) => existsSync(candidate));
+  return [...fileCandidates, ...indexCandidates].find(isExistingSourceFile);
+}
+
+function typeScriptSourceCandidates(basePath: string, extension: string): ReadonlyArray<string> {
+  const stem = basePath.slice(0, -extension.length);
+  switch (extension) {
+    case ".js":
+      return [`${stem}.ts`, `${stem}.tsx`];
+    case ".jsx":
+      return [`${stem}.tsx`];
+    case ".mjs":
+      return [`${stem}.mts`];
+    case ".cjs":
+      return [`${stem}.cts`];
+    default:
+      return [];
+  }
+}
+
+function isExistingSourceFile(path: string): boolean {
+  if (!isSourceFile(path)) {
+    return false;
+  }
+  return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
 }
