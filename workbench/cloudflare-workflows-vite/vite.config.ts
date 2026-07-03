@@ -1,5 +1,5 @@
 import { cloudflare } from "@cloudflare/vite-plugin";
-import { defineConfig } from "vite";
+import { defineConfig } from "vite-plus";
 import { withCloudflareWorkflows } from "../../packages/sideffect/src/vite";
 
 export default defineConfig({
