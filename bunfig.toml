@@ -1,0 +1,17 @@
+[install]
+# Only install package versions published at least 3 days ago
+minimumReleaseAge = 259200
+# These packages will bypass the 3-day minimum age requirement
+minimumReleaseAgeExcludes = [
+  "vite-plus",
+  "vite",
+  "@voidzero-dev/vite-plus-core",
+  "@voidzero-dev/vite-plus-darwin-arm64",
+  "@voidzero-dev/vite-plus-darwin-x64",
+  "@voidzero-dev/vite-plus-linux-arm64-gnu",
+  "@voidzero-dev/vite-plus-linux-arm64-musl",
+  "@voidzero-dev/vite-plus-linux-x64-gnu",
+  "@voidzero-dev/vite-plus-linux-x64-musl",
+  "@voidzero-dev/vite-plus-win32-x64-msvc",
+  "@voidzero-dev/vite-plus-win32-arm64-msvc"
+]
