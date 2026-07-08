@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact sideffect version to publish, e.g. 0.2.2
+        description: Exact Sideffect release-set version to publish, e.g. 0.2.2
         required: true
       confirm:
-        description: Type publish sideffect@<version>
+        description: Type publish sideffect@<version> and @sideffect/lint@<version>
         required: true
       npm_tag:
         description: npm dist-tag
@@ -47,11 +47,19 @@ jobs:
           INPUT_CONFIRM: ${{ inputs.confirm }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          package_version="$(node -p "require('./packages/sideffect/package.json').version")"
-          expected_confirm="publish sideffect@${package_version}"
+          sideffect_version="$(node -p "require('./packages/sideffect/package.json').version")"
+          lint_version="$(node -p "require('./packages/lint-plugin/package.json').version")"
+
+          if [ "${sideffect_version}" != "${lint_version}" ]; then
+            printf 'Refusing to publish: packages/sideffect/package.json version "%s" does not match packages/lint-plugin/package.json version "%s". Run bun run changeset:version and commit the generated release changes before publishing.\n' "${sideffect_version}" "${lint_version}" >&2
+            exit 1
+          fi
+
+          package_version="${sideffect_version}"
+          expected_confirm="publish sideffect@${package_version} and @sideffect/lint@${package_version}"
 
           if [ "${INPUT_VERSION}" != "${package_version}" ]; then
-            printf 'Refusing to publish: workflow input version "%s" does not match packages/sideffect/package.json version "%s". Run bun run changeset:version and dispatch this workflow with the exact package version.\n' "${INPUT_VERSION}" "${package_version}" >&2
+            printf 'Refusing to publish: workflow input version "%s" does not match the Sideffect release-set version "%s". Run bun run changeset:version and dispatch this workflow with the exact package version.\n' "${INPUT_VERSION}" "${package_version}" >&2
             exit 1
           fi
 
@@ -71,35 +79,37 @@ jobs:
             exit 1
           fi
 
+          if npm view "@sideffect/lint@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            printf 'Refusing to publish: @sideffect/lint@%s already exists on npm. The registry was not changed.\n' "${package_version}" >&2
+            exit 1
+          fi
+
       - name: Install deps
         run: bun install --frozen-lockfile
 
-      - name: Check sideffect
-        working-directory: packages/sideffect
+      - name: Check packages
         run: bun run check
 
-      - name: Test sideffect
-        working-directory: packages/sideffect
+      - name: Test packages
         run: bun run test
 
-      # Build before publish so npm validates package.json after bin targets exist.
-      - name: Build sideffect
-        working-directory: packages/sideffect
+      # Build before publish so npm validates package.json after package outputs exist.
+      - name: Build packages
         run: bun run build
 
       - name: Run Cloudflare workflow E2E
         run: bun run test:e2e
 
-      - name: Pack sideffect
-        working-directory: packages/sideffect
+      - name: Pack release set
         run: |
-          mkdir -p ../../release-artifacts
-          npm pack --pack-destination ../../release-artifacts
+          mkdir -p release-artifacts
+          npm pack ./packages/sideffect --pack-destination release-artifacts
+          npm pack ./packages/lint-plugin --pack-destination release-artifacts
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sideffect-package
-          path: release-artifacts/sideffect-*.tgz
+          name: sideffect-packages
+          path: release-artifacts/*.tgz
           if-no-files-found: error
           retention-days: 1
 
@@ -119,11 +129,23 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: sideffect-package
+          name: sideffect-packages
           path: release-artifacts
 
-      - name: Publish sideffect (OIDC, no token)
+      - name: Publish release set (OIDC, no token)
         env:
           INPUT_VERSION: ${{ inputs.version }}
           NPM_TAG: ${{ inputs.npm_tag }}
-        run: npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+        run: |
+          if npm view "sideffect@${INPUT_VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            printf 'Refusing to publish: sideffect@%s already exists on npm. The registry was not changed.\n' "${INPUT_VERSION}" >&2
+            exit 1
+          fi
+
+          if npm view "@sideffect/lint@${INPUT_VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            printf 'Refusing to publish: @sideffect/lint@%s already exists on npm. The registry was not changed.\n' "${INPUT_VERSION}" >&2
+            exit 1
+          fi
+
+          npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+          npm publish "release-artifacts/sideffect-lint-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
