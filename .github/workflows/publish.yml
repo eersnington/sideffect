@@ -33,8 +33,6 @@ jobs:
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
 
       # npm Trusted Publishing requires npm >= 11.5.1 and Node >= 22.14.
       - uses: actions/setup-node@v4
@@ -93,18 +91,24 @@ jobs:
       - name: Test packages
         run: bun run test
 
-      # Build before publish so npm validates package.json after package outputs exist.
+      # Build before packing so the release tarballs contain package outputs.
       - name: Build packages
         run: bun run build
 
       - name: Run Cloudflare workflow E2E
         run: bun run test:e2e
 
-      - name: Pack release set
-        run: |
-          mkdir -p release-artifacts
-          npm pack ./packages/sideffect --pack-destination release-artifacts
-          npm pack ./packages/lint-plugin --pack-destination release-artifacts
+      - name: Create release artifact directory
+        run: mkdir -p release-artifacts
+
+      # Bun resolves catalog: dependencies to publishable versions while packing.
+      - name: Pack sideffect
+        working-directory: packages/sideffect
+        run: bun pm pack --destination ../../release-artifacts
+
+      - name: Pack lint plugin
+        working-directory: packages/lint-plugin
+        run: bun pm pack --destination ../../release-artifacts
 
       - uses: actions/upload-artifact@v4
         with:
