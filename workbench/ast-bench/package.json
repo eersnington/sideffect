@@ -1,0 +1,17 @@
+{
+  "name": "ast-bench",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "bun run src/bench.ts",
+    "bench:node": "node --experimental-strip-types src/bench.ts",
+    "check": "vp check"
+  },
+  "devDependencies": {
+    "@types/node": "25.6.2",
+    "oxc-parser": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

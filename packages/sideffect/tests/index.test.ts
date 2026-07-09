@@ -97,7 +97,13 @@ function fakeWorkflowEvent<Payload>(
   };
 }
 
-function callConfigResolved(plugin: SideffectWorkflowsPlugin, config: { readonly root: string }) {
+function callConfigResolved(
+  plugin: SideffectWorkflowsPlugin,
+  config: {
+    readonly root: string;
+    readonly logger?: { readonly info?: (message: string) => void };
+  },
+) {
   const hook = (plugin as any)["configResolved"];
   return typeof hook === "function" ? hook(config) : hook?.handler?.(config);
 }
@@ -760,6 +766,40 @@ test("Sideffect workflows plugin discovers workflows from Vite root before confi
     },
   ));
 
+test("Sideffect workflows plugin logs selected Oxc parser once through Vite logger", () =>
+  withTempProject(
+    {
+      "src/index.ts": `export default { async fetch() { return new Response("ok"); } };`,
+      "src/workflows/my-workflow.ts": `
+        import { Schema, Workflow } from "sideffect";
+        export const layer = Workflow.make({ name: "my-workflow", payload: Schema.String }).toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      const logs: Array<string> = [];
+      const plugin = createSideffectWorkflowsPlugin();
+      if (typeof plugin.cloudflare.config !== "function") {
+        throw new Error("Expected cloudflare config customizer");
+      }
+
+      callConfig(plugin, { root });
+      plugin.cloudflare.config({ main: "src/index.ts" });
+      expect(logs).toEqual([]);
+
+      callConfigResolved(plugin, {
+        root,
+        logger: { info: (message) => logs.push(message) },
+      });
+      callConfigResolved(plugin, {
+        root,
+        logger: { info: (message) => logs.push(message) },
+      });
+
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toMatch(/^\[sideffect\] workflow discovery parser: oxc /);
+    },
+  ));
+
 test("Sideffect workflows plugin imports default workflow layers in generated entry and env types", () =>
   withTempProject(
     {
@@ -985,6 +1025,20 @@ test("workflow collector follows local workflow re-export chains", () =>
       expect(
         collectWorkflowEntries("src/workflows/index.ts", root).map((workflow) => workflow.config),
       ).toEqual([{ binding: "MY_WORKFLOW", name: "my-workflow", class_name: "MyWorkflow" }]);
+    },
+  ));
+
+test("workflow collector does not treat empty re-exports as export all", () =>
+  withTempProject(
+    {
+      "src/workflows/index.ts": `export {} from "./hidden";`,
+      "src/workflows/hidden.ts": `
+        import { Schema, Workflow } from "sideffect";
+        export const layer = Workflow.make({ name: "hidden", payload: Schema.String }).toLayer(async () => undefined);
+      `,
+    },
+    (root) => {
+      expect(collectWorkflowEntries("src/workflows/index.ts", root)).toEqual([]);
     },
   ));
 
