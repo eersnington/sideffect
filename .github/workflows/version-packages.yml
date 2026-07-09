@@ -1,0 +1,50 @@
+name: Version packages
+
+on:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+concurrency:
+  group: version-packages
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+          no-cache: true
+          token: ""
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile --ignore-scripts --no-cache
+
+      - name: Create or update version pull request
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          branch: main
+          commit: Version packages
+          title: Version packages
+          createGithubReleases: false
+          commitMode: github-api
+          setupGitUser: false
+          prDraft: create
+          github-token: ${{ github.token }}
