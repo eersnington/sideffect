@@ -1,5 +1,5 @@
 ---
-"@sideffect/lint": patch
+"@sideffect/lint": minor
 ---
 
 Add ESLint and Oxlint rules for Cloudflare Workflows and Sideffect workflow syntax.
