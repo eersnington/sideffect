@@ -26,7 +26,6 @@ import {
 } from "./typescript-discovery.ts";
 import {
   makeWorkflowDiscoveryParserFromOxc,
-  parseWorkflowSourceText,
   type WorkflowDiscoveryParser,
 } from "../../../packages/sideffect/src/vite/workflow-discovery-parser.ts";
 
@@ -343,7 +342,12 @@ function parseCorpus(
   corpus: ReadonlyArray<SourceEntry>,
 ): Array<SourceEntry> {
   for (const entry of corpus) {
-    parseWorkflowSourceText(parser, entry.path, entry.source);
+    const result = parser.parse(entry.path, entry.source);
+    if (result.errors.length > 0) {
+      throw new Error(
+        `Oxc failed to parse ${entry.path}: ${result.errors[0]?.message ?? "unknown parser error"}`,
+      );
+    }
   }
   return [...corpus];
 }

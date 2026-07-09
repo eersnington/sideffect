@@ -255,7 +255,11 @@ function collectWorkflowExportsFromFile(
     const module =
       importedDefinitions.values.size === 0
         ? moduleWithLocalDefinitions
-        : yield* parseWorkflowSourceFile(traversal.parser, filePath, importedDefinitions.values);
+        : yield* parseWorkflowSourceFile({
+            parser: traversal.parser,
+            filePath,
+            importedDefinitions: importedDefinitions.values,
+          });
     const exports = new Map(module.exports);
     let cycleCut = importedDefinitions.cycleCut;
 
@@ -330,7 +334,11 @@ function collectWorkflowDefinitionExportsFromFile(
     const module =
       importedDefinitions.values.size === 0
         ? moduleWithLocalDefinitions
-        : yield* parseWorkflowSourceFile(traversal.parser, filePath, importedDefinitions.values);
+        : yield* parseWorkflowSourceFile({
+            parser: traversal.parser,
+            filePath,
+            importedDefinitions: importedDefinitions.values,
+          });
     const exports = new Map(module.definitionExports);
     let cycleCut = importedDefinitions.cycleCut;
 
@@ -418,7 +426,11 @@ function parseWorkflowSourceWithoutImportedDefinitions(
       return cached;
     }
 
-    const parsed = yield* parseWorkflowSourceFile(traversal.parser, filePath, new Map());
+    const parsed = yield* parseWorkflowSourceFile({
+      parser: traversal.parser,
+      filePath,
+      importedDefinitions: new Map(),
+    });
     traversal.parsedSources.set(filePath, parsed);
     return parsed;
   });

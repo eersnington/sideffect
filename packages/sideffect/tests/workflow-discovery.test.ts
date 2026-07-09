@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vite-plus/test";
-import type { EcmaScriptModule, ParseResult, Program } from "oxc-parser";
+import type { EcmaScriptModule, Program } from "oxc-parser";
 
 import { collectWorkflowEntries } from "../src/vite.ts";
 import { collectWorkflowEntriesWithParser } from "../src/vite/workflow-discovery.ts";
 import {
   makeWorkflowDiscoveryParserFromOxc,
-  parseWorkflowSourceText,
+  type WorkflowParserResult,
 } from "../src/vite/workflow-discovery-parser.ts";
 
 function withTempProject<A>(files: Record<string, string>, run: (root: string) => A): A {
@@ -33,6 +33,12 @@ test("workflow collector discovers namespace Workflow imports", () =>
       "src/workflows/my-workflow.ts": `
         import { Schema } from "sideffect";
         import * as Sideffect from "sideffect";
+
+        const Workflow = "not-a-static-member";
+        export const unrelated = Sideffect[Workflow].make({
+          name: "computed-member",
+          payload: Schema.String,
+        }).toLayer(async () => undefined);
 
         export const layer = Sideffect.Workflow.make({
           name: "namespace-workflow",
@@ -318,9 +324,9 @@ test("workflow parser selects raw transfer when supported", () => {
   const calls: Array<unknown> = [];
   const parser = makeWorkflowDiscoveryParserFromOxc(recordingParser(true, calls));
 
-  parseWorkflowSourceText(parser, "workflow.ts", "export const value = 1;");
+  parser.parse("workflow.ts", "export const value = 1;");
 
-  expect(parser.selection).toEqual({ _tag: "RawTransfer" });
+  expect(parser.selection).toBe("raw-transfer");
   expect(calls).toEqual([expect.objectContaining({ experimentalRawTransfer: true })]);
 });
 
@@ -328,9 +334,9 @@ test("workflow parser selects standard mode when raw transfer is unavailable", (
   const calls: Array<unknown> = [];
   const parser = makeWorkflowDiscoveryParserFromOxc(recordingParser(false, calls));
 
-  parseWorkflowSourceText(parser, "workflow.ts", "export const value = 1;");
+  parser.parse("workflow.ts", "export const value = 1;");
 
-  expect(parser.selection).toEqual({ _tag: "Standard" });
+  expect(parser.selection).toBe("standard");
   expect(calls).toEqual([expect.not.objectContaining({ experimentalRawTransfer: true })]);
 });
 
@@ -344,7 +350,7 @@ test("workflow parser does not retry standard parsing after raw-transfer parse f
     },
   });
 
-  expect(() => parseWorkflowSourceText(parser, "workflow.ts", "broken")).toThrow(/bad syntax/);
+  expect(parser.parse("workflow.ts", "broken").errors[0]?.message).toBe("bad syntax");
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({ experimentalRawTransfer: true });
 });
@@ -359,7 +365,7 @@ function recordingParser(rawTransferSupported: boolean, calls: Array<unknown>) {
   };
 }
 
-function parseResult(errors: ReadonlyArray<{ readonly message: string }>): ParseResult {
+function parseResult(errors: ReadonlyArray<{ readonly message: string }>): WorkflowParserResult {
   const program: Program = {
     type: "Program",
     start: 0,
@@ -378,13 +384,6 @@ function parseResult(errors: ReadonlyArray<{ readonly message: string }>): Parse
   return {
     program,
     module,
-    comments: [],
-    errors: errors.map((error) => ({
-      severity: "Error",
-      message: error.message,
-      labels: [],
-      helpMessage: null,
-      codeframe: null,
-    })),
-  } as ParseResult;
+    errors,
+  };
 }

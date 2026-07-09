@@ -1,8 +1,8 @@
 /**
  * Owns workflow-discovery parsing through Oxc.
  *
- * This is the only module that selects raw-transfer mode and translates parser
- * load/read/parse failures into typed discovery errors before the Vite boundary.
+ * This module selects raw-transfer mode once, hides Oxc parser options behind a
+ * narrow parse capability, and keeps read/parse failures typed for discovery.
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -12,9 +12,11 @@ import { Effect, Schema } from "effect";
 import type {
   EcmaScriptModule,
   Expression,
+  ExportDefaultDeclarationKind,
   ExportDefaultDeclaration,
   ExportNamedDeclaration,
-  ImportDeclaration,
+  MemberExpression,
+  ObjectProperty,
   ParserOptions,
   Program,
   Statement,
@@ -26,20 +28,33 @@ import type { WorkflowLayerImport } from "./workflow-discovery.ts";
 const require = createRequire(import.meta.url);
 const identifierName = /^[$A-Z_a-z][$\w]*$/;
 
-type OxcParserModule = Pick<typeof import("oxc-parser"), "parseSync" | "rawTransferSupported">;
+interface OxcParserModule {
+  readonly parseSync: (
+    filePath: string,
+    source: string,
+    options: OxcParserOptions,
+  ) => WorkflowParserResult;
+  readonly rawTransferSupported: () => boolean;
+}
+
 type OxcParserOptions = ParserOptions & {
   readonly experimentalRawTransfer?: boolean;
 };
 
-/** @internal Selected Oxc parser mode for one workflow discovery run. */
-export type WorkflowDiscoveryParserSelection =
-  | { readonly _tag: "RawTransfer" }
-  | { readonly _tag: "Standard" };
+/** @internal Oxc output consumed by workflow discovery. */
+export interface WorkflowParserResult {
+  readonly program: Program;
+  readonly module: EcmaScriptModule;
+  readonly errors: ReadonlyArray<{ readonly message: string }>;
+}
 
-/** @internal Oxc parser dependency and mode selected for workflow discovery. */
+/** @internal Selected Oxc parser mode for one workflow discovery run. */
+export type WorkflowDiscoveryParserSelection = "raw-transfer" | "standard";
+
+/** @internal Selected parser mode and configured parse capability. */
 export interface WorkflowDiscoveryParser {
-  readonly parser: OxcParserModule;
   readonly selection: WorkflowDiscoveryParserSelection;
+  readonly parse: (filePath: string, source: string) => WorkflowParserResult;
 }
 
 /** @internal Static workflow export discovered from a parsed source module. */
@@ -70,6 +85,20 @@ export interface ParsedWorkflowSourceFile {
   readonly reExports: ReadonlyArray<WorkflowReExport>;
   readonly exports: ReadonlyMap<string, DiscoveredWorkflowExport>;
   readonly definitionExports: ReadonlyMap<string, string>;
+}
+
+interface WorkflowBindings {
+  readonly names: Set<string>;
+  readonly namespaces: Set<string>;
+}
+
+interface WorkflowSourceAnalysis {
+  readonly filePath: string;
+  readonly bindings: WorkflowBindings;
+  readonly definitions: Map<string, string>;
+  readonly layers: Map<string, string>;
+  readonly exports: Map<string, DiscoveredWorkflowExport>;
+  readonly definitionExports: Map<string, string>;
 }
 
 /** @internal Expected failure while loading the workflow parser dependency. */
@@ -129,74 +158,12 @@ export const makeWorkflowDiscoveryParser: Effect.Effect<
 export function makeWorkflowDiscoveryParserFromOxc(
   parser: OxcParserModule,
 ): WorkflowDiscoveryParser {
+  const selection = parser.rawTransferSupported() ? "raw-transfer" : "standard";
   return {
-    parser,
-    selection: parser.rawTransferSupported() ? { _tag: "RawTransfer" } : { _tag: "Standard" },
+    selection,
+    parse: (filePath, source) =>
+      parser.parseSync(filePath, source, parseOptions(selection, filePath)),
   };
-}
-
-/** @internal Reads, parses, and analyzes one workflow source file with Oxc. */
-export function parseWorkflowSourceFile(
-  workflowParser: WorkflowDiscoveryParser,
-  filePath: string,
-  importedWorkflowDefinitions: ReadonlyMap<string, string>,
-): Effect.Effect<
-  ParsedWorkflowSourceFile,
-  WorkflowParserInvocationFailed | WorkflowSourceReadFailed | WorkflowSourceParseFailed
-> {
-  return Effect.gen(function* () {
-    const source = yield* Effect.try({
-      try: () => readFileSync(filePath, "utf8"),
-      catch: (cause) => new WorkflowSourceReadFailed({ filePath, cause }),
-    });
-    const result = yield* Effect.try({
-      try: () =>
-        workflowParser.parser.parseSync(filePath, source, parseOptions(workflowParser, filePath)),
-      catch: (cause) => new WorkflowParserInvocationFailed({ filePath, cause }),
-    });
-
-    if (result.errors.length > 0) {
-      return yield* new WorkflowSourceParseFailed({
-        filePath,
-        message: result.errors[0]?.message ?? "unknown parser error",
-      });
-    }
-
-    return analyzeWorkflowSourceFile(
-      filePath,
-      result.program,
-      result.module,
-      importedWorkflowDefinitions,
-    );
-  });
-}
-
-/** @internal Parses one source string with the selected Oxc parser mode. */
-export function parseWorkflowSourceText(
-  workflowParser: WorkflowDiscoveryParser,
-  filePath: string,
-  source: string,
-): void {
-  const result = workflowParser.parser.parseSync(
-    filePath,
-    source,
-    parseOptions(workflowParser, filePath),
-  );
-  if (result.errors.length > 0) {
-    throw new Error(
-      `Oxc failed to parse ${filePath} while benchmarking Sideffect discovery: ${result.errors[0]?.message ?? "unknown parser error"}`,
-    );
-  }
-}
-
-/** @internal Formats parser mode selection for Vite logs. */
-export function formatParserSelection(selection: WorkflowDiscoveryParserSelection): string {
-  switch (selection._tag) {
-    case "RawTransfer":
-      return "oxc raw-transfer";
-    case "Standard":
-      return "oxc standard (raw transfer unavailable)";
-  }
 }
 
 function loadOxcParser(): Effect.Effect<OxcParserModule, WorkflowParserUnavailable> {
@@ -206,23 +173,64 @@ function loadOxcParser(): Effect.Effect<OxcParserModule, WorkflowParserUnavailab
 
   return Effect.try({
     try: () => {
-      // SAFETY: The following runtime checks prove the parser surface this adapter uses.
-      const parser = require("oxc-parser") as Partial<OxcParserModule>;
-      if (typeof parser.parseSync !== "function") {
-        throw new Error('Resolved "oxc-parser", but it does not expose parseSync.');
-      }
-      if (typeof parser.rawTransferSupported !== "function") {
-        throw new Error('Resolved "oxc-parser", but it does not expose rawTransferSupported.');
-      }
-
-      loadedOxcParser = parser as OxcParserModule;
-      return loadedOxcParser;
+      // SAFETY: oxc-parser is an exact runtime dependency. This assertion is
+      // isolated at the CommonJS boundary; callers receive a narrow capability.
+      const parser = require("oxc-parser") as OxcParserModule;
+      loadedOxcParser = parser;
+      return parser;
     },
     catch: (cause) => new WorkflowParserUnavailable({ cause }),
   });
 }
 
-function parseOptions(workflowParser: WorkflowDiscoveryParser, filePath: string): OxcParserOptions {
+interface ParseWorkflowSourceFileInput {
+  readonly parser: WorkflowDiscoveryParser;
+  readonly filePath: string;
+  readonly importedDefinitions: ReadonlyMap<string, string>;
+}
+
+/** @internal Reads, parses, and analyzes one workflow source file with Oxc. */
+export const parseWorkflowSourceFile = Effect.fnUntraced(function* (
+  input: ParseWorkflowSourceFileInput,
+): Effect.fn.Return<ParsedWorkflowSourceFile, WorkflowParserFailure> {
+  const source = yield* Effect.try({
+    try: () => readFileSync(input.filePath, "utf8"),
+    catch: (cause) => new WorkflowSourceReadFailed({ filePath: input.filePath, cause }),
+  });
+  const result = yield* Effect.try({
+    try: () => input.parser.parse(input.filePath, source),
+    catch: (cause) => new WorkflowParserInvocationFailed({ filePath: input.filePath, cause }),
+  });
+
+  if (result.errors.length > 0) {
+    return yield* new WorkflowSourceParseFailed({
+      filePath: input.filePath,
+      message: result.errors[0]?.message ?? "unknown parser error",
+    });
+  }
+
+  return analyzeWorkflowSourceFile(
+    input.filePath,
+    result.program,
+    result.module,
+    input.importedDefinitions,
+  );
+});
+
+/** @internal Formats parser mode selection for Vite logs. */
+export function formatParserSelection(selection: WorkflowDiscoveryParserSelection): string {
+  switch (selection) {
+    case "raw-transfer":
+      return "oxc raw-transfer";
+    case "standard":
+      return "oxc standard (raw transfer unavailable)";
+  }
+}
+
+function parseOptions(
+  selection: WorkflowDiscoveryParserSelection,
+  filePath: string,
+): OxcParserOptions {
   return {
     astType: "ts",
     lang: oxcLangForFile(filePath),
@@ -230,7 +238,7 @@ function parseOptions(workflowParser: WorkflowDiscoveryParser, filePath: string)
     range: false,
     showSemanticErrors: false,
     sourceType: "module",
-    ...(workflowParser.selection._tag === "RawTransfer" ? { experimentalRawTransfer: true } : {}),
+    ...(selection === "raw-transfer" ? { experimentalRawTransfer: true } : {}),
   };
 }
 
@@ -260,27 +268,20 @@ function analyzeWorkflowSourceFile(
   const workflowLayers = new Map<string, string>();
   const exports = new Map<string, DiscoveredWorkflowExport>();
   const definitionExports = new Map<string, string>();
-
-  for (const statement of program.body) {
-    collectStatement(
-      filePath,
-      statement,
-      workflowBindings,
-      workflowDefinitions,
-      workflowLayers,
-      exports,
-      definitionExports,
-    );
-  }
-
-  collectLocalExportSpecifiers(
+  const analysis: WorkflowSourceAnalysis = {
     filePath,
-    module,
-    workflowDefinitions,
-    workflowLayers,
+    bindings: workflowBindings,
+    definitions: workflowDefinitions,
+    layers: workflowLayers,
     exports,
     definitionExports,
-  );
+  };
+
+  for (const statement of program.body) {
+    collectStatement(statement, analysis);
+  }
+
+  collectLocalExportSpecifiers(module, analysis);
 
   return {
     filePath,
@@ -291,10 +292,7 @@ function analyzeWorkflowSourceFile(
   };
 }
 
-function collectWorkflowBindings(module: EcmaScriptModule): {
-  readonly names: Set<string>;
-  readonly namespaces: Set<string>;
-} {
+function collectWorkflowBindings(module: EcmaScriptModule): WorkflowBindings {
   const names = new Set<string>();
   const namespaces = new Set<string>();
 
@@ -325,7 +323,7 @@ function collectLocalImports(module: EcmaScriptModule): ReadonlyArray<LocalWorkf
 
   for (const importDeclaration of module.staticImports) {
     const specifier = importDeclaration.moduleRequest.value;
-    if (!isLocalSpecifier(specifier)) {
+    if (!(specifier.startsWith(".") || specifier.startsWith("/"))) {
       continue;
     }
 
@@ -397,90 +395,38 @@ function collectReExports(module: EcmaScriptModule): ReadonlyArray<WorkflowReExp
   ];
 }
 
-function collectStatement(
-  filePath: string,
-  statement: Statement | ImportDeclaration,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
-): void {
+function collectStatement(statement: Statement, analysis: WorkflowSourceAnalysis): void {
   switch (statement.type) {
     case "VariableDeclaration": {
-      collectVariableDeclaration(
-        filePath,
-        statement,
-        false,
-        workflowBindings,
-        workflowDefinitions,
-        workflowLayers,
-        exports,
-        definitionExports,
-      );
+      collectVariableDeclaration(statement, false, analysis);
       break;
     }
     case "ExportNamedDeclaration": {
-      collectExportNamedDeclaration(
-        filePath,
-        statement,
-        workflowBindings,
-        workflowDefinitions,
-        workflowLayers,
-        exports,
-        definitionExports,
-      );
+      collectExportNamedDeclaration(statement, analysis);
       break;
     }
     case "ExportDefaultDeclaration": {
-      collectDefaultExport(
-        filePath,
-        statement,
-        workflowBindings,
-        workflowDefinitions,
-        workflowLayers,
-        exports,
-        definitionExports,
-      );
+      collectDefaultExport(statement, analysis);
       break;
     }
   }
 }
 
 function collectExportNamedDeclaration(
-  filePath: string,
   statement: ExportNamedDeclaration,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
+  analysis: WorkflowSourceAnalysis,
 ): void {
   if (statement.exportKind === "type" || statement.declaration?.type !== "VariableDeclaration") {
     return;
   }
 
-  collectVariableDeclaration(
-    filePath,
-    statement.declaration,
-    true,
-    workflowBindings,
-    workflowDefinitions,
-    workflowLayers,
-    exports,
-    definitionExports,
-  );
+  collectVariableDeclaration(statement.declaration, true, analysis);
 }
 
 function collectVariableDeclaration(
-  filePath: string,
   declaration: VariableDeclaration,
   exported: boolean,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
+  analysis: WorkflowSourceAnalysis,
 ): void {
   for (const declarator of declaration.declarations) {
     if (declarator.id.type !== "Identifier" || !declarator.init) {
@@ -488,29 +434,29 @@ function collectVariableDeclaration(
     }
 
     const name = declarator.id.name;
-    const workflowName = workflowNameFromMakeCall(declarator.init, workflowBindings);
+    const workflowName = workflowNameFromMakeCall(declarator.init, analysis.bindings);
     if (workflowName) {
-      workflowDefinitions.set(name, workflowName);
+      analysis.definitions.set(name, workflowName);
       if (exported) {
-        definitionExports.set(name, workflowName);
+        analysis.definitionExports.set(name, workflowName);
       }
       continue;
     }
 
     const layerWorkflowName = workflowNameFromLayerExpression(
       declarator.init,
-      workflowBindings,
-      workflowDefinitions,
+      analysis.bindings,
+      analysis.definitions,
     );
     if (!layerWorkflowName) {
       continue;
     }
 
-    workflowLayers.set(name, layerWorkflowName);
+    analysis.layers.set(name, layerWorkflowName);
     if (exported) {
-      exports.set(name, {
+      analysis.exports.set(name, {
         workflowName: layerWorkflowName,
-        modulePath: filePath,
+        modulePath: analysis.filePath,
         exportKind: "named",
         exportName: name,
       });
@@ -519,26 +465,22 @@ function collectVariableDeclaration(
 }
 
 function collectDefaultExport(
-  filePath: string,
   statement: ExportDefaultDeclaration,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
+  analysis: WorkflowSourceAnalysis,
 ): void {
-  const expression = skipOuterExpression(statement.declaration);
-  if (!expression) {
+  const declaration = defaultExportExpression(statement.declaration);
+  if (!declaration) {
     return;
   }
+  const expression = skipOuterExpression(declaration);
 
   const layerWorkflowName =
-    workflowNameFromLayerExpression(expression, workflowBindings, workflowDefinitions) ??
-    (expression.type === "Identifier" ? workflowLayers.get(expression.name) : undefined);
+    workflowNameFromLayerExpression(expression, analysis.bindings, analysis.definitions) ??
+    (expression.type === "Identifier" ? analysis.layers.get(expression.name) : undefined);
   if (layerWorkflowName) {
-    exports.set("default", {
+    analysis.exports.set("default", {
       workflowName: layerWorkflowName,
-      modulePath: filePath,
+      modulePath: analysis.filePath,
       exportKind: "default",
       exportName: "default",
     });
@@ -547,20 +489,30 @@ function collectDefaultExport(
 
   const workflowName =
     expression.type === "Identifier"
-      ? workflowDefinitions.get(expression.name)
-      : workflowNameFromMakeCall(expression, workflowBindings);
+      ? analysis.definitions.get(expression.name)
+      : workflowNameFromMakeCall(expression, analysis.bindings);
   if (workflowName) {
-    definitionExports.set("default", workflowName);
+    analysis.definitionExports.set("default", workflowName);
+  }
+}
+
+function defaultExportExpression(
+  declaration: ExportDefaultDeclarationKind,
+): Expression | undefined {
+  switch (declaration.type) {
+    case "ClassDeclaration":
+    case "FunctionDeclaration":
+    case "TSDeclareFunction":
+    case "TSInterfaceDeclaration":
+      return;
+    default:
+      return declaration;
   }
 }
 
 function collectLocalExportSpecifiers(
-  filePath: string,
   module: EcmaScriptModule,
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
+  analysis: WorkflowSourceAnalysis,
 ): void {
   for (const exportDeclaration of module.staticExports) {
     for (const entry of exportDeclaration.entries) {
@@ -577,54 +529,48 @@ function collectLocalExportSpecifiers(
         continue;
       }
 
-      collectExportSpecifier(
-        filePath,
-        { imported, exported },
-        workflowDefinitions,
-        workflowLayers,
-        exports,
-        definitionExports,
-      );
+      collectExportSpecifier({ imported, exported }, analysis);
     }
   }
 }
 
 function collectExportSpecifier(
-  filePath: string,
   specifier: { readonly imported: string; readonly exported: string },
-  workflowDefinitions: Map<string, string>,
-  workflowLayers: Map<string, string>,
-  exports: Map<string, DiscoveredWorkflowExport>,
-  definitionExports: Map<string, string>,
+  analysis: WorkflowSourceAnalysis,
 ): void {
-  const workflowName = workflowLayers.get(specifier.imported);
+  const workflowName = analysis.layers.get(specifier.imported);
   if (workflowName) {
-    exports.set(
+    analysis.exports.set(
       specifier.exported,
       specifier.exported === "default"
-        ? { workflowName, modulePath: filePath, exportKind: "default", exportName: "default" }
+        ? {
+            workflowName,
+            modulePath: analysis.filePath,
+            exportKind: "default",
+            exportName: "default",
+          }
         : {
             workflowName,
-            modulePath: filePath,
+            modulePath: analysis.filePath,
             exportKind: "named",
             exportName: specifier.exported,
           },
     );
   }
 
-  const definitionWorkflowName = workflowDefinitions.get(specifier.imported);
+  const definitionWorkflowName = analysis.definitions.get(specifier.imported);
   if (definitionWorkflowName) {
-    definitionExports.set(specifier.exported, definitionWorkflowName);
+    analysis.definitionExports.set(specifier.exported, definitionWorkflowName);
   }
 }
 
 function workflowNameFromLayerExpression(
   expression: Expression,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
+  workflowBindings: WorkflowBindings,
   workflowDefinitions: ReadonlyMap<string, string>,
 ): string | undefined {
   const call = skipOuterExpression(expression);
-  if (call?.type !== "CallExpression") {
+  if (call.type !== "CallExpression") {
     return;
   }
 
@@ -634,9 +580,6 @@ function workflowNameFromLayerExpression(
   }
 
   const receiver = skipOuterExpression(callee.object);
-  if (!receiver) {
-    return;
-  }
   if (receiver.type === "Identifier") {
     return workflowDefinitions.get(receiver.name);
   }
@@ -646,10 +589,10 @@ function workflowNameFromLayerExpression(
 
 function workflowNameFromMakeCall(
   expression: Expression,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
+  workflowBindings: WorkflowBindings,
 ): string | undefined {
   const call = skipOuterExpression(expression);
-  if (call?.type !== "CallExpression") {
+  if (call.type !== "CallExpression") {
     return;
   }
 
@@ -668,7 +611,7 @@ function workflowNameFromMakeCall(
   }
 
   const object = skipOuterExpression(options);
-  if (object?.type !== "ObjectExpression") {
+  if (object.type !== "ObjectExpression") {
     return;
   }
 
@@ -694,14 +637,8 @@ function workflowNameFromMakeCall(
   return workflowName;
 }
 
-function isWorkflowReceiver(
-  expression: Expression,
-  workflowBindings: { readonly names: Set<string>; readonly namespaces: Set<string> },
-): boolean {
+function isWorkflowReceiver(expression: Expression, workflowBindings: WorkflowBindings): boolean {
   const receiver = skipOuterExpression(expression);
-  if (!receiver) {
-    return false;
-  }
   if (receiver.type === "Identifier") {
     return workflowBindings.names.has(receiver.name);
   }
@@ -713,39 +650,35 @@ function isWorkflowReceiver(
   );
 }
 
-function isMemberNamed(
-  expression: Expression | undefined,
-  property: string,
-): expression is Extract<Expression, { readonly type: "MemberExpression" }> {
-  return expression?.type === "MemberExpression" && memberPropertyName(expression) === property;
+function isMemberNamed(expression: Expression, property: string): expression is MemberExpression {
+  return expression.type === "MemberExpression" && memberPropertyName(expression) === property;
 }
 
-function memberPropertyName(
-  expression: Extract<Expression, { readonly type: "MemberExpression" }>,
-): string | undefined {
-  if (expression.property.type === "Identifier") {
+function memberPropertyName(expression: MemberExpression): string | undefined {
+  if (!expression.computed && expression.property.type === "Identifier") {
     return expression.property.name;
   }
-  return expression.computed ? staticString(skipOuterExpression(expression.property)) : undefined;
-}
-
-function propertyKeyName(
-  property: Extract<Expression, { readonly type: "ObjectExpression" }>["properties"][number],
-): string | undefined {
-  if (property.type !== "Property") {
+  if (!expression.computed) {
     return;
   }
+  return staticString(skipOuterExpression(expression.property));
+}
+
+function propertyKeyName(property: ObjectProperty): string | undefined {
   if (!property.computed && property.key.type === "Identifier") {
     return property.key.name;
+  }
+  if (property.key.type === "Identifier" || property.key.type === "PrivateIdentifier") {
+    return;
   }
   return staticString(skipOuterExpression(property.key));
 }
 
-function staticString(expression: Expression | undefined): string | undefined {
-  if (expression?.type === "Literal" && typeof expression.value === "string") {
+function staticString(expression: Expression): string | undefined {
+  if (expression.type === "Literal" && typeof expression.value === "string") {
     return expression.value;
   }
-  if (expression?.type !== "TemplateLiteral" || expression.expressions.length > 0) {
+  if (expression.type !== "TemplateLiteral" || expression.expressions.length > 0) {
     return;
   }
 
@@ -753,12 +686,8 @@ function staticString(expression: Expression | undefined): string | undefined {
   return quasi?.value.cooked ?? quasi?.value.raw;
 }
 
-function skipOuterExpression(value: unknown): Expression | undefined {
-  if (!isExpression(value)) {
-    return;
-  }
-
-  let current: Expression = value;
+function skipOuterExpression(expression: Expression): Expression {
+  let current = expression;
   while (
     current.type === "ParenthesizedExpression" ||
     current.type === "TSAsExpression" ||
@@ -772,18 +701,6 @@ function skipOuterExpression(value: unknown): Expression | undefined {
   return current;
 }
 
-function isExpression(value: unknown): value is Expression {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    typeof (value as { readonly type?: unknown }).type === "string"
-  );
-}
-
 function isIdentifierName(value: string): boolean {
   return identifierName.test(value);
-}
-
-function isLocalSpecifier(specifier: string): boolean {
-  return specifier.startsWith(".") || specifier.startsWith("/");
 }
