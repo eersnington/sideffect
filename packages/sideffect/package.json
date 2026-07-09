@@ -33,7 +33,7 @@
     "prepublishOnly": "vp run build"
   },
   "dependencies": {
-    "oxc-parser": "0.138.0"
+    "oxc-parser": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.40.0",
