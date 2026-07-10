@@ -1,10 +1,11 @@
-name: Publish to npm
+name: Release Sideffect
+run-name: Release Sideffect ${{ inputs.version }} to npm and GitHub
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: Exact Sideffect release-set version to publish, e.g. 0.2.2
+        description: Exact Sideffect release-set version, e.g. 0.3.0
         required: true
       confirm:
         description: Type publish sideffect@<version> and @sideffect/lint@<version>
@@ -29,7 +30,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
@@ -72,14 +73,23 @@ jobs:
             exit 1
           fi
 
+          sideffect_published=false
           if npm view "sideffect@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            printf 'Refusing to publish: sideffect@%s already exists on npm. The registry was not changed.\n' "${package_version}" >&2
+            sideffect_published=true
+          fi
+
+          lint_published=false
+          if npm view "@sideffect/lint@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
+            lint_published=true
+          fi
+
+          if [ "${sideffect_published}" != "${lint_published}" ]; then
+            printf 'Refusing to continue: the %s release set is only partially published on npm. No additional package was published.\n' "${package_version}" >&2
             exit 1
           fi
 
-          if npm view "@sideffect/lint@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            printf 'Refusing to publish: @sideffect/lint@%s already exists on npm. The registry was not changed.\n' "${package_version}" >&2
-            exit 1
+          if [ "${sideffect_published}" = true ]; then
+            printf 'Both packages are already published at %s; continuing validation so the GitHub release can be repaired.\n' "${package_version}"
           fi
 
       - name: Install deps
@@ -141,15 +151,85 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
           NPM_TAG: ${{ inputs.npm_tag }}
         run: |
+          sideffect_published=false
           if npm view "sideffect@${INPUT_VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            printf 'Refusing to publish: sideffect@%s already exists on npm. The registry was not changed.\n' "${INPUT_VERSION}" >&2
-            exit 1
+            sideffect_published=true
           fi
 
+          lint_published=false
           if npm view "@sideffect/lint@${INPUT_VERSION}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            printf 'Refusing to publish: @sideffect/lint@%s already exists on npm. The registry was not changed.\n' "${INPUT_VERSION}" >&2
+            lint_published=true
+          fi
+
+          if [ "${sideffect_published}" != "${lint_published}" ]; then
+            printf 'Refusing to continue: the %s release set is only partially published on npm. No additional package was published.\n' "${INPUT_VERSION}" >&2
             exit 1
           fi
 
-          npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
-          npm publish "release-artifacts/sideffect-lint-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+          if [ "${sideffect_published}" = true ]; then
+            sideffect_tag_version="$(npm view "sideffect@${NPM_TAG}" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            lint_tag_version="$(npm view "@sideffect/lint@${NPM_TAG}" version --registry=https://registry.npmjs.org 2>/dev/null || true)"
+
+            if [ "${sideffect_tag_version}" != "${INPUT_VERSION}" ] || [ "${lint_tag_version}" != "${INPUT_VERSION}" ]; then
+              printf 'Refusing to repair the GitHub release: npm tag %s does not point both packages to %s.\n' "${NPM_TAG}" "${INPUT_VERSION}" >&2
+              exit 1
+            fi
+
+            printf 'Both packages are already published at %s; skipping npm publication.\n' "${INPUT_VERSION}"
+          else
+            npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+            npm publish "release-artifacts/sideffect-lint-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+          fi
+
+  release:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Generate release notes
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: node .github/scripts/generate-release-notes.mjs "${INPUT_VERSION}" > release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          NPM_TAG: ${{ inputs.npm_tag }}
+        run: |
+          tag="v${INPUT_VERSION}"
+          title="Sideffect ${INPUT_VERSION}"
+
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tag_commit="$(git rev-list -n 1 "${tag}")"
+            if [ "${tag_commit}" != "${GITHUB_SHA}" ]; then
+              printf 'Refusing to update tag %s: it points to %s instead of the published commit %s.\n' "${tag}" "${tag_commit}" "${GITHUB_SHA}" >&2
+              exit 1
+            fi
+          fi
+
+          release_flags=(--latest)
+          if [ "${NPM_TAG}" != "latest" ]; then
+            release_flags=(--prerelease --latest=false)
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" \
+              --title "${title}" \
+              --notes-file release-notes.md \
+              "${release_flags[@]}"
+          else
+            gh release create "${tag}" \
+              --target "${GITHUB_SHA}" \
+              --title "${title}" \
+              --notes-file release-notes.md \
+              "${release_flags[@]}"
+          fi
