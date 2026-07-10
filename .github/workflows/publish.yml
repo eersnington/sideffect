@@ -177,8 +177,8 @@ jobs:
 
             printf 'Both packages are already published at %s; skipping npm publication.\n' "${INPUT_VERSION}"
           else
-            npm publish "release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
-            npm publish "release-artifacts/sideffect-lint-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+            npm publish "./release-artifacts/sideffect-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
+            npm publish "./release-artifacts/sideffect-lint-${INPUT_VERSION}.tgz" --provenance --tag "${NPM_TAG}" --ignore-scripts
           fi
 
   release:
