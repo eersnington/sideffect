@@ -4,6 +4,8 @@ import { makeNonRetryableError } from "./errors.ts";
 import type { NonRetryableErrorConstructor } from "./errors.ts";
 import type { MaybeEffect } from "./types.ts";
 
+const schemaDecoders = new WeakMap<object, (value: unknown) => unknown>();
+
 /** @internal Runtime options used when converting expected failures. */
 export interface RuntimeErrorOptions {
   /** Optional native Cloudflare `NonRetryableError` constructor. */
@@ -28,11 +30,22 @@ export function decodeWithSchema<A>(
   options: RuntimeErrorOptions = {},
 ): A {
   try {
-    return Schema.decodeUnknownSync(schema as never)(value) as A;
+    return decoderFor(schema)(value) as A;
   } catch (cause) {
     throw makeNonRetryableError(
       `${operation} failed because the value did not match its schema. The workflow will not retry this invalid input. Cause: ${String(cause)}`,
       options.NonRetryableError,
     );
   }
+}
+
+function decoderFor<A>(schema: Schema.Schema<A>): (value: unknown) => A {
+  const cached = schemaDecoders.get(schema);
+  if (cached) {
+    return cached as (value: unknown) => A;
+  }
+
+  const decoder = Schema.decodeUnknownSync(schema as never) as (value: unknown) => A;
+  schemaDecoders.set(schema, decoder);
+  return decoder;
 }
