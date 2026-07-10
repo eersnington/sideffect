@@ -6,10 +6,16 @@ import { workflowCases } from "../workflow-cases";
 type WorkflowCase = (typeof workflowCases)[number];
 type WorkflowKey = WorkflowCase["key"];
 
+type WorkflowStatus = {
+  readonly status: string;
+  readonly output: unknown;
+  readonly error: unknown;
+};
+
 type WorkflowRun =
-  | { readonly state: "running" }
-  | { readonly state: "success"; readonly id: string; readonly status: unknown }
-  | { readonly state: "error"; readonly message: string };
+  | { readonly state: "starting" }
+  | { readonly state: "started"; readonly id: string; readonly status: WorkflowStatus }
+  | { readonly state: "error" };
 
 type WorkflowRuns = Partial<Record<WorkflowKey, WorkflowRun>>;
 
@@ -21,22 +27,47 @@ export const Route = createFileRoute("/")({
 function Workbench() {
   const workflows = Route.useLoaderData();
   const [runs, setRuns] = useState<WorkflowRuns>({});
-  const isRunning = Object.values(runs).some((run) => run?.state === "running");
+  const isRunning = Object.values(runs).some(isWorkflowRunning);
 
   const runWorkflow = async (workflow: WorkflowCase) => {
-    setRuns((current) => ({ ...current, [workflow.key]: { state: "running" } }));
-    const result = await startWorkflow(workflow.key);
-    setRuns((current) => ({ ...current, [workflow.key]: result }));
+    const id = `${workflow.key}-${crypto.randomUUID()}`;
+    setRuns((runs) => ({ ...runs, [workflow.key]: { state: "starting" } }));
+
+    try {
+      const startResponse = await fetch(
+        `/api/workflows/${workflow.key}?id=${encodeURIComponent(id)}`,
+        { method: "POST" },
+      );
+      if (!startResponse.ok) {
+        setRuns((runs) => ({ ...runs, [workflow.key]: { state: "error" } }));
+        return;
+      }
+
+      const created = await startResponse.json<{ readonly status: WorkflowStatus }>();
+      let status = created.status;
+      setRuns((runs) => ({ ...runs, [workflow.key]: { state: "started", id, status } }));
+
+      while (isActiveStatus(status.status)) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+
+        const statusResponse = await fetch(
+          `/api/workflows/${workflow.key}?id=${encodeURIComponent(id)}`,
+        );
+        if (!statusResponse.ok) {
+          setRuns((runs) => ({ ...runs, [workflow.key]: { state: "error" } }));
+          return;
+        }
+
+        status = await statusResponse.json<WorkflowStatus>();
+        setRuns((runs) => ({ ...runs, [workflow.key]: { state: "started", id, status } }));
+      }
+    } catch {
+      setRuns((runs) => ({ ...runs, [workflow.key]: { state: "error" } }));
+    }
   };
 
   const runAllWorkflows = async () => {
-    setRuns(createRunningRuns(workflows));
-
-    const results = await Promise.all(
-      workflows.map(async (workflow) => [workflow.key, await startWorkflow(workflow.key)] as const),
-    );
-
-    setRuns(Object.fromEntries(results));
+    await Promise.all(workflows.map(runWorkflow));
   };
 
   return (
@@ -68,7 +99,7 @@ function Workbench() {
             onClick={() => void runAllWorkflows()}
             type="button"
           >
-            {isRunning ? "Running Workflows…" : `Run All ${workflows.length} Workflows`}
+            {isRunning ? "Workflows Active…" : `Run All ${workflows.length} Workflows`}
           </button>
         </section>
 
@@ -118,10 +149,10 @@ function WorkflowRow({
   readonly run: WorkflowRun | undefined;
   readonly onRun: () => void;
 }) {
-  const state = run?.state ?? "idle";
+  const isRunning = isWorkflowRunning(run);
 
   return (
-    <li className="workflow-row" data-state={state}>
+    <li className="workflow-row">
       <div className="workflow-row__summary">
         <div className="workflow-name">
           <strong>{workflow.key}</strong>
@@ -136,11 +167,11 @@ function WorkflowRow({
 
         <button
           className="button button--secondary button--small"
-          disabled={state === "running"}
+          disabled={isRunning}
           onClick={onRun}
           type="button"
         >
-          {state === "running" ? "Starting…" : "Run Workflow"}
+          {run?.state === "starting" ? "Creating…" : isRunning ? "Checking…" : "Run Workflow"}
         </button>
       </div>
 
@@ -150,18 +181,30 @@ function WorkflowRow({
 }
 
 function WorkflowStatus({ run }: { readonly run: WorkflowRun | undefined }) {
-  const state = run?.state ?? "idle";
-  const label =
-    state === "idle"
-      ? "Ready"
-      : state === "running"
-        ? "Starting…"
-        : state === "success"
-          ? "Started"
-          : "Failed";
+  let label = "Ready";
+  let tone = "neutral";
+
+  if (run?.state === "starting") {
+    label = "Creating…";
+    tone = "active";
+  } else if (run?.state === "error") {
+    label = "Failed";
+    tone = "error";
+  } else if (run?.state === "started") {
+    label = run.status.status;
+    tone = isActiveStatus(run.status.status) ? "active" : "neutral";
+
+    if (run.status.status === "complete") {
+      label = "Complete";
+      tone = "success";
+    } else if (run.status.status === "errored" || run.status.status === "terminated") {
+      label = "Failed";
+      tone = "error";
+    }
+  }
 
   return (
-    <span className="status" data-state={state} aria-live="polite">
+    <span className="status" data-tone={tone} aria-live="polite">
       <span className="status__dot" aria-hidden="true" />
       {label}
     </span>
@@ -169,81 +212,61 @@ function WorkflowStatus({ run }: { readonly run: WorkflowRun | undefined }) {
 }
 
 function WorkflowResult({ run }: { readonly run: WorkflowRun | undefined }) {
-  if (!run || run.state === "running") {
+  if (!run || run.state === "starting") {
     return null;
   }
 
   if (run.state === "error") {
     return (
       <div className="workflow-result workflow-result--error" aria-live="polite">
-        <strong>Workflow failed.</strong> {run.message}
+        The workflow request failed. Check the worker logs and try again.
       </div>
     );
   }
 
-  return (
-    <div className="workflow-result" aria-live="polite">
-      <div className="workflow-result__meta">
-        <span>Instance</span>
-        <code translate="no">{run.id}</code>
+  if (isActiveStatus(run.status.status)) {
+    return (
+      <div className="workflow-result workflow-result--active" aria-live="polite">
+        <WorkflowInstanceId id={run.id} />
+        <p>The instance is active. Its status refreshes automatically.</p>
       </div>
-      <pre>{formatStatus(run.status)}</pre>
+    );
+  }
+
+  const className =
+    run.status.status === "errored" || run.status.status === "terminated"
+      ? "workflow-result workflow-result--error"
+      : "workflow-result";
+
+  return (
+    <div className={className} aria-live="polite">
+      <WorkflowInstanceId id={run.id} />
+      <pre>{JSON.stringify(run.status, null, 2)}</pre>
     </div>
   );
 }
 
-async function startWorkflow(key: WorkflowKey): Promise<WorkflowRun> {
-  const id = `${key}-${crypto.randomUUID()}`;
-
-  try {
-    const response = await fetch(`/api/workflows/${key}?id=${encodeURIComponent(id)}`, {
-      method: "POST",
-    });
-
-    if (!response.ok) {
-      return {
-        state: "error",
-        message: `The server returned ${response.status}. Check the worker logs and try again.`,
-      };
-    }
-
-    const created = parseCreatedWorkflow(await response.json());
-    if (!created) {
-      return {
-        state: "error",
-        message: "The server returned an invalid response. Check the worker logs and try again.",
-      };
-    }
-
-    return { state: "success", id: created.id, status: created.status };
-  } catch (error: unknown) {
-    return {
-      state: "error",
-      message: error instanceof Error ? error.message : "The browser could not reach the worker.",
-    };
-  }
+function WorkflowInstanceId({ id }: { readonly id: string }) {
+  return (
+    <div className="workflow-result__meta">
+      <span>Instance</span>
+      <code translate="no">{id}</code>
+    </div>
+  );
 }
 
-function parseCreatedWorkflow(
-  value: unknown,
-): { readonly id: string; readonly status: unknown } | null {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("id" in value) ||
-    typeof value.id !== "string" ||
-    !("status" in value)
-  ) {
-    return null;
-  }
-
-  return { id: value.id, status: value.status };
+function isWorkflowRunning(run: WorkflowRun | undefined): boolean {
+  return (
+    run?.state === "starting" || (run?.state === "started" && isActiveStatus(run.status.status))
+  );
 }
 
-function createRunningRuns(workflows: ReadonlyArray<WorkflowCase>): WorkflowRuns {
-  return Object.fromEntries(workflows.map((workflow) => [workflow.key, { state: "running" }]));
-}
-
-function formatStatus(status: unknown): string {
-  return typeof status === "string" ? status : JSON.stringify(status, null, 2);
+function isActiveStatus(status: string): boolean {
+  return (
+    status === "queued" ||
+    status === "running" ||
+    status === "waiting" ||
+    status === "waitingForPause" ||
+    status === "unknown"
+  );
 }

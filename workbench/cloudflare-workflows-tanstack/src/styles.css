@@ -347,15 +347,15 @@ pre {
   background: #a8a8a8;
 }
 
-.status[data-state="running"] .status__dot {
+.status[data-tone="active"] .status__dot {
   background: #ffae00;
 }
 
-.status[data-state="success"] .status__dot {
+.status[data-tone="success"] .status__dot {
   background: #28a948;
 }
 
-.status[data-state="error"] .status__dot {
+.status[data-tone="error"] .status__dot {
   background: #fc0035;
 }
 
@@ -371,6 +371,18 @@ pre {
   border-color: #ffd7d6;
   color: #d8001b;
   background: #ffeeef;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.workflow-result--active {
+  border-color: #ffe4ad;
+  background: #fff9ed;
+}
+
+.workflow-result--active p {
+  margin: 0;
+  color: #6a4a00;
   font-size: 13px;
   line-height: 18px;
 }
