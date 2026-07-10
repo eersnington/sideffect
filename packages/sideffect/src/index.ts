@@ -16,6 +16,7 @@ export type {
   WorkflowContext,
   WorkflowDefinition,
   WorkflowEvent,
+  WorkflowInput,
   WorkflowLayer,
   WorkflowRun,
 } from "./types.ts";

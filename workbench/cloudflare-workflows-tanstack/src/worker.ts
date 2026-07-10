@@ -1,5 +1,6 @@
 import server from "@tanstack/react-start/server-entry";
 import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";
+import { createSharedWorkflow, getSharedWorkflow } from "cloudflare-workflows-shared";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
 
 import { workflowCases } from "./workflow-cases";
@@ -30,11 +31,11 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    if (url.pathname === "/api/e2e/workflows") {
+    if (url.pathname === "/api/workflows") {
       return Response.json(workflowCases);
     }
 
-    const workflowMatch = /^\/api\/e2e\/workflows\/([^/]+)$/.exec(url.pathname);
+    const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(url.pathname);
     if (workflowMatch) {
       const [, key] = workflowMatch;
       const e2eCase = workflowCases.find((entry) => entry.key === key);
@@ -42,10 +43,12 @@ export default {
         return Response.json({ error: `Unknown workflow case ${key}` }, { status: 404 });
       }
 
-      const workflow = (env as unknown as Record<string, Workflow<unknown>>)[e2eCase.binding];
       if (request.method === "POST") {
         const id = url.searchParams.get("id") ?? `${e2eCase.key}-${Date.now()}`;
-        const instance = await workflow.create({ id, params: e2eCase.params });
+        const instance =
+          e2eCase.binding === "NATIVE_CHECK"
+            ? await env.NATIVE_CHECK.create({ id, params: e2eCase.params })
+            : await createSharedWorkflow(env, e2eCase, id);
 
         return Response.json({ id: instance.id, status: await instance.status() });
       }
@@ -56,7 +59,10 @@ export default {
           return Response.json({ error: "Missing workflow instance id" }, { status: 400 });
         }
 
-        const instance = await workflow.get(id);
+        const instance =
+          e2eCase.binding === "NATIVE_CHECK"
+            ? await env.NATIVE_CHECK.get(id)
+            : await getSharedWorkflow(env, e2eCase, id);
         return Response.json(await instance.status());
       }
 

@@ -1,230 +1,249 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
+
 import { workflowCases } from "../workflow-cases";
 
 type WorkflowCase = (typeof workflowCases)[number];
+type WorkflowKey = WorkflowCase["key"];
 
-type WorkflowRunState =
-  | { readonly status: "running" }
-  | { readonly status: "success"; readonly id: string; readonly details: unknown }
-  | { readonly status: "error"; readonly message: string };
+type WorkflowRun =
+  | { readonly state: "running" }
+  | { readonly state: "success"; readonly id: string; readonly status: unknown }
+  | { readonly state: "error"; readonly message: string };
 
-type WorkflowRunMap = Record<string, WorkflowRunState>;
+type WorkflowRuns = Partial<Record<WorkflowKey, WorkflowRun>>;
 
 export const Route = createFileRoute("/")({
   loader: () => workflowCases,
-  component: Home,
+  component: Workbench,
 });
 
-function Home() {
-  const cases = Route.useLoaderData();
-  const [runs, setRuns] = useState<WorkflowRunMap>({});
-  const hasRunningWorkflow = Object.values(runs).some((run) => run.status === "running");
+function Workbench() {
+  const workflows = Route.useLoaderData();
+  const [runs, setRuns] = useState<WorkflowRuns>({});
+  const isRunning = Object.values(runs).some((run) => run?.state === "running");
 
-  const handleTriggerWorkflow = async (key: string) => {
-    setRuns((previous) => ({ ...previous, [key]: { status: "running" } }));
-    const result = await createWorkflowRun(key);
-    setRuns((previous) => ({ ...previous, [key]: result }));
+  const runWorkflow = async (workflow: WorkflowCase) => {
+    setRuns((current) => ({ ...current, [workflow.key]: { state: "running" } }));
+    const result = await startWorkflow(workflow.key);
+    setRuns((current) => ({ ...current, [workflow.key]: result }));
   };
 
-  const handleTriggerAll = async () => {
-    setRuns((previous) => ({ ...previous, ...createRunningMap(cases) }));
+  const runAllWorkflows = async () => {
+    setRuns(createRunningRuns(workflows));
+
     const results = await Promise.all(
-      cases.map(async (entry) => [entry.key, await createWorkflowRun(entry.key)] as const),
+      workflows.map(async (workflow) => [workflow.key, await startWorkflow(workflow.key)] as const),
     );
 
-    setRuns((previous) => ({ ...previous, ...Object.fromEntries(results) }));
+    setRuns(Object.fromEntries(results));
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 px-6 py-10 text-slate-100">
-      <main className="mx-auto max-w-5xl">
-        <div className="mb-8 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+    <div className="workbench-page">
+      <header className="site-header">
+        <div className="site-header__inner">
+          <a className="brand" href="#main-content" aria-label="Sideffect Workbench home">
+            <span>Sideffect</span>
+            <span className="brand__separator" aria-hidden="true" />
+            <span className="brand__context">TanStack Start</span>
+          </a>
+          <span className="environment-badge">Local Workbench</span>
+        </div>
+      </header>
+
+      <main className="workbench-main" id="main-content">
+        <section className="hero" aria-labelledby="page-title">
           <div>
-            <p className="text-sm font-medium uppercase tracking-[0.3em] text-cyan-300">
-              Sideffect Workbench
-            </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">
-              TanStack Start uses the shared Cloudflare Workflow matrix
-            </h1>
-            <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300">
-              These cases are the same workflow definitions used by the plain Vite workbench. The
-              TanStack app adds API routes on top of the generated Cloudflare workflow bindings.
+            <h1 id="page-title">Cloudflare Workflows</h1>
+            <p className="hero__copy">
+              Run the shared Sideffect examples through TanStack Start and inspect each Cloudflare
+              workflow instance.
             </p>
           </div>
 
           <button
-            className="rounded-full bg-cyan-300 px-5 py-3 text-sm font-semibold text-slate-950 shadow-lg shadow-cyan-950/40 transition hover:bg-cyan-200 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-            disabled={cases.length === 0 || hasRunningWorkflow}
-            onClick={() => void handleTriggerAll()}
+            className="button button--primary"
+            disabled={isRunning}
+            onClick={() => void runAllWorkflows()}
             type="button"
           >
-            {hasRunningWorkflow ? "Running workflows..." : `Run all ${cases.length} workflows`}
+            {isRunning ? "Running Workflows…" : `Run All ${workflows.length} Workflows`}
           </button>
-        </div>
+        </section>
 
-        <div className="grid gap-4 md:grid-cols-2">
-          {cases.map((entry) => {
-            const run = runs[entry.key];
-            const isRunning = run?.status === "running";
+        <section className="workflow-panel" aria-labelledby="workflow-list-title">
+          <div className="workflow-panel__header">
+            <div>
+              <h2 id="workflow-list-title">Workflow Examples</h2>
+              <p>Discovered from the shared Sideffect workflow definitions.</p>
+            </div>
+            <span className="workflow-count">{workflows.length} workflows</span>
+          </div>
 
-            return (
-              <article
-                className="rounded-2xl border border-white/10 bg-white/4 p-5 shadow-2xl shadow-cyan-950/20"
-                key={entry.key}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold">{entry.key}</h2>
-                    <p className="mt-1 text-sm text-slate-400">{entry.className}</p>
-                  </div>
-                  <span className="rounded-full bg-cyan-400/10 px-3 py-1 text-xs font-medium text-cyan-200">
-                    {entry.binding}
-                  </span>
-                </div>
+          <div className="workflow-columns" aria-hidden="true">
+            <span>Workflow</span>
+            <span>Binding</span>
+            <span>Status</span>
+            <span />
+          </div>
 
-                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="rounded-lg bg-black/30 p-3 font-mono text-xs text-slate-300">
-                    POST /api/e2e/workflows/{entry.key}
-                  </p>
-                  <button
-                    className="rounded-full border border-cyan-300/30 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500"
-                    disabled={isRunning}
-                    onClick={() => void handleTriggerWorkflow(entry.key)}
-                    type="button"
-                  >
-                    {isRunning ? "Running..." : "Run workflow"}
-                  </button>
-                </div>
+          <ul className="workflow-list">
+            {workflows.map((workflow) => (
+              <WorkflowRow
+                key={workflow.key}
+                workflow={workflow}
+                run={runs[workflow.key]}
+                onRun={() => void runWorkflow(workflow)}
+              />
+            ))}
+          </ul>
+        </section>
 
-                <WorkflowRunResult run={run} />
-              </article>
-            );
-          })}
-        </div>
+        <footer className="workbench-footer">
+          <span>POST /api/workflows/:key</span>
+          <span>Cloudflare Workers · Sideffect · TanStack Start</span>
+        </footer>
       </main>
     </div>
   );
 }
 
-function WorkflowRunResult({ run }: { readonly run: WorkflowRunState | undefined }) {
-  if (!run) {
-    return <p className="mt-4 text-sm text-slate-500">Not triggered yet.</p>;
+function WorkflowRow({
+  workflow,
+  run,
+  onRun,
+}: {
+  readonly workflow: WorkflowCase;
+  readonly run: WorkflowRun | undefined;
+  readonly onRun: () => void;
+}) {
+  const state = run?.state ?? "idle";
+
+  return (
+    <li className="workflow-row" data-state={state}>
+      <div className="workflow-row__summary">
+        <div className="workflow-name">
+          <strong>{workflow.key}</strong>
+          <span>{workflow.className}</span>
+        </div>
+
+        <code className="binding-name" translate="no">
+          {workflow.binding}
+        </code>
+
+        <WorkflowStatus run={run} />
+
+        <button
+          className="button button--secondary button--small"
+          disabled={state === "running"}
+          onClick={onRun}
+          type="button"
+        >
+          {state === "running" ? "Starting…" : "Run Workflow"}
+        </button>
+      </div>
+
+      <WorkflowResult run={run} />
+    </li>
+  );
+}
+
+function WorkflowStatus({ run }: { readonly run: WorkflowRun | undefined }) {
+  const state = run?.state ?? "idle";
+  const label =
+    state === "idle"
+      ? "Ready"
+      : state === "running"
+        ? "Starting…"
+        : state === "success"
+          ? "Started"
+          : "Failed";
+
+  return (
+    <span className="status" data-state={state} aria-live="polite">
+      <span className="status__dot" aria-hidden="true" />
+      {label}
+    </span>
+  );
+}
+
+function WorkflowResult({ run }: { readonly run: WorkflowRun | undefined }) {
+  if (!run || run.state === "running") {
+    return null;
   }
 
-  if (run.status === "running") {
-    return <p className="mt-4 text-sm font-medium text-cyan-200">Starting workflow instance...</p>;
-  }
-
-  if (run.status === "error") {
+  if (run.state === "error") {
     return (
-      <p className="mt-4 rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-100">
-        {run.message}
-      </p>
+      <div className="workflow-result workflow-result--error" aria-live="polite">
+        <strong>Workflow failed.</strong> {run.message}
+      </div>
     );
   }
 
   return (
-    <div className="mt-4 rounded-xl border border-emerald-400/20 bg-emerald-500/10 p-3">
-      <p className="text-sm font-medium text-emerald-100">Started instance {run.id}</p>
-      <pre className="mt-3 overflow-auto rounded-lg bg-black/30 p-3 text-xs leading-5 text-emerald-50">
-        {formatWorkflowDetails(run.details)}
-      </pre>
+    <div className="workflow-result" aria-live="polite">
+      <div className="workflow-result__meta">
+        <span>Instance</span>
+        <code translate="no">{run.id}</code>
+      </div>
+      <pre>{formatStatus(run.status)}</pre>
     </div>
   );
 }
 
-function createRunningMap(cases: ReadonlyArray<WorkflowCase>): WorkflowRunMap {
-  const runs: WorkflowRunMap = {};
-  for (const entry of cases) {
-    runs[entry.key] = { status: "running" };
-  }
+async function startWorkflow(key: WorkflowKey): Promise<WorkflowRun> {
+  const id = `${key}-${crypto.randomUUID()}`;
 
-  return runs;
-}
-
-async function createWorkflowRun(key: string): Promise<WorkflowRunState> {
   try {
-    const id = createWorkflowInstanceId(key);
-    const response = await fetch(`/api/e2e/workflows/${key}?id=${encodeURIComponent(id)}`, {
+    const response = await fetch(`/api/workflows/${key}?id=${encodeURIComponent(id)}`, {
       method: "POST",
     });
-    const body = await readResponseBody(response);
 
     if (!response.ok) {
-      return { status: "error", message: formatWorkflowError(key, response, body) };
-    }
-
-    if (!isRecord(body)) {
       return {
-        status: "error",
-        message: `Workflow ${key} was created, but the server returned an unreadable response. Check the worker logs for instance ${id}.`,
+        state: "error",
+        message: `The server returned ${response.status}. Check the worker logs and try again.`,
       };
     }
 
+    const created = parseCreatedWorkflow(await response.json());
+    if (!created) {
+      return {
+        state: "error",
+        message: "The server returned an invalid response. Check the worker logs and try again.",
+      };
+    }
+
+    return { state: "success", id: created.id, status: created.status };
+  } catch (error: unknown) {
     return {
-      status: "success",
-      id: typeof body.id === "string" ? body.id : id,
-      details: body.status ?? body,
-    };
-  } catch (error) {
-    return {
-      status: "error",
-      message:
-        error instanceof Error
-          ? `Workflow ${key} was not started: ${error.message}`
-          : `Workflow ${key} was not started because the browser reported an unknown error.`,
+      state: "error",
+      message: error instanceof Error ? error.message : "The browser could not reach the worker.",
     };
   }
 }
 
-function createWorkflowInstanceId(key: string): string {
-  const randomId =
-    typeof globalThis.crypto?.randomUUID === "function"
-      ? globalThis.crypto.randomUUID()
-      : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+function parseCreatedWorkflow(
+  value: unknown,
+): { readonly id: string; readonly status: unknown } | null {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "string" ||
+    !("status" in value)
+  ) {
+    return null;
+  }
 
-  return `${key}-${randomId}`;
+  return { id: value.id, status: value.status };
 }
 
-async function readResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) {
-    return undefined;
-  }
-
-  try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    return text;
-  }
+function createRunningRuns(workflows: ReadonlyArray<WorkflowCase>): WorkflowRuns {
+  return Object.fromEntries(workflows.map((workflow) => [workflow.key, { state: "running" }]));
 }
 
-function formatWorkflowError(key: string, response: Response, body: unknown): string {
-  if (isRecord(body) && typeof body.error === "string") {
-    return `${body.error}. Workflow ${key} was not started.`;
-  }
-
-  if (typeof body === "string" && body.trim().length > 0) {
-    return `Workflow ${key} was not started: ${body}`;
-  }
-
-  const statusText = response.statusText ? ` ${response.statusText}` : "";
-  return `Workflow ${key} was not started. The server returned ${response.status}${statusText}.`;
-}
-
-function formatWorkflowDetails(details: unknown): string {
-  if (details === undefined) {
-    return "No workflow status returned.";
-  }
-
-  if (typeof details === "string") {
-    return details;
-  }
-
-  return JSON.stringify(details, null, 2);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function formatStatus(status: unknown): string {
+  return typeof status === "string" ? status : JSON.stringify(status, null, 2);
 }

@@ -759,6 +759,7 @@ test("Sideffect workflows plugin discovers workflows from Vite root before confi
       const envTypes = readFileSync(join(root, "sideffect-env.d.ts"), "utf8");
       expect(envTypes).not.toContain("Workflow as CloudflareWorkflow");
       expect(envTypes).not.toContain('from "cloudflare:workers"');
+      expect(envTypes).toContain('import type { WorkflowInput } from "sideffect";');
       expect(envTypes).toContain(
         "type __SideffectCloudflareWorkflow<Payload> = Workflow<Payload>;",
       );
