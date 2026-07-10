@@ -1,21 +1,23 @@
 import { DurableObject, WorkflowEntrypoint } from "cloudflare:workers";
-import { sharedWorkflowCases } from "cloudflare-workflows-shared";
+import {
+  createSharedWorkflow,
+  getSharedWorkflow,
+  sharedWorkflowCases,
+} from "cloudflare-workflows-shared";
 import type { WorkflowEvent, WorkflowStep } from "cloudflare:workers";
-import type { SharedWorkflowCase } from "cloudflare-workflows-shared";
+import type { WorkflowCase } from "cloudflare-workflows-shared";
 
 const nativeWorkflowCase = {
   key: "native-check",
   binding: "NATIVE_CHECK",
   className: "NativeCheck",
   params: { label: "native" },
-} satisfies SharedWorkflowCase;
+} as const satisfies WorkflowCase;
 
 const e2eCases = [
   ...sharedWorkflowCases,
-  {
-    ...nativeWorkflowCase,
-  },
-] satisfies Array<SharedWorkflowCase>;
+  nativeWorkflowCase,
+] as const satisfies ReadonlyArray<WorkflowCase>;
 
 export class NativeCheck extends WorkflowEntrypoint<Env> {
   override async run(event: WorkflowEvent<{ label: string }>, step: WorkflowStep) {
@@ -49,28 +51,41 @@ export default {
       return stub.fetch(req);
     }
 
-    if (url.pathname === "/e2e/workflows") {
+    if (url.pathname === "/api/workflows") {
       return Response.json(e2eCases);
     }
 
-    const workflowMatch = /^\/e2e\/workflows\/([^/]+)\/(create|status)$/.exec(url.pathname);
+    const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(url.pathname);
     if (workflowMatch) {
-      const [, key, action] = workflowMatch;
+      const [, key] = workflowMatch;
       const e2eCase = e2eCases.find((entry) => entry.key === key);
       if (!e2eCase) {
         return Response.json({ error: `Unknown workflow case ${key}` }, { status: 404 });
       }
 
-      const id = url.searchParams.get("id") ?? `${e2eCase.key}-${Date.now()}`;
-      const workflow = (env as unknown as Record<string, Workflow<unknown>>)[e2eCase.binding];
-
-      if (action === "create") {
-        const instance = await workflow.create({ id, params: e2eCase.params });
+      if (req.method === "POST") {
+        const id = url.searchParams.get("id") ?? `${e2eCase.key}-${Date.now()}`;
+        const instance =
+          e2eCase.binding === "NATIVE_CHECK"
+            ? await env.NATIVE_CHECK.create({ id, params: e2eCase.params })
+            : await createSharedWorkflow(env, e2eCase, id);
         return Response.json({ id: instance.id, status: await instance.status() });
       }
 
-      const instance = await workflow.get(id);
-      return Response.json(await instance.status());
+      if (req.method === "GET") {
+        const id = url.searchParams.get("id");
+        if (!id) {
+          return Response.json({ error: "Missing workflow instance id" }, { status: 400 });
+        }
+
+        const instance =
+          e2eCase.binding === "NATIVE_CHECK"
+            ? await env.NATIVE_CHECK.get(id)
+            : await getSharedWorkflow(env, e2eCase, id);
+        return Response.json(await instance.status());
+      }
+
+      return Response.json({ error: `Unsupported method ${req.method}` }, { status: 405 });
     }
 
     const id = url.searchParams.get("instanceId");

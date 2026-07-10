@@ -8,11 +8,11 @@ import type {
 } from "./types.ts";
 
 /** Options for creating a Sideffect workflow definition. */
-export interface WorkflowMakeOptions<Payload> {
+export interface WorkflowMakeOptions<Payload, Input = Payload> {
   /** Cloudflare Workflow name. */
   readonly name: string;
   /** Schema used to decode incoming workflow event payloads. */
-  readonly payload: Schema.Schema<Payload>;
+  readonly payload: Schema.Codec<Payload, Input, never, unknown>;
 }
 
 /** Helpers for defining Sideffect workflows. */
@@ -35,14 +35,16 @@ export const Workflow = {
    * });
    * ```
    */
-  make<Payload, Env = DefaultCloudflareEnv>(
-    options: WorkflowMakeOptions<Payload>,
-  ): WorkflowDefinition<Payload, Env> {
-    const definition: WorkflowDefinition<Payload, Env> = {
+  make<Payload, Env = DefaultCloudflareEnv, Input = Payload>(
+    options: WorkflowMakeOptions<Payload, Input>,
+  ): WorkflowDefinition<Payload, Env, Input> {
+    const definition: WorkflowDefinition<Payload, Env, Input> = {
       _tag: "WorkflowDefinition",
       name: options.name,
       payloadSchema: options.payload,
-      toLayer<Result>(run: WorkflowRun<Payload, Result, Env>): WorkflowLayer<Payload, Result, Env> {
+      toLayer<Result>(
+        run: WorkflowRun<Payload, Result, Env>,
+      ): WorkflowLayer<Payload, Result, Env, Input> {
         return {
           _tag: "WorkflowLayer",
           workflow: definition,

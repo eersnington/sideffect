@@ -1,4 +1,5 @@
 import { Rollback, Schema, Step, Workflow } from "../src/index.ts";
+import type { WorkflowInput } from "../src/index.ts";
 
 declare global {
   namespace Cloudflare {
@@ -40,5 +41,13 @@ Workflow.make({
 
   return step.do(envBackedStep, workflow.payload);
 });
+
+const encodedWorkflow = Workflow.make({
+  name: "encoded-workflow",
+  payload: Schema.NumberFromString,
+}).toLayer(async ({ payload }) => payload);
+
+const encodedInput: WorkflowInput<typeof encodedWorkflow> = "42";
+void encodedInput;
 
 export {};

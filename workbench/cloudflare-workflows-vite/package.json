@@ -10,7 +10,7 @@
     "dev": "vp dev",
     "build": "vp build",
     "cf-typegen": "wrangler types",
-    "test:e2e": "vp test --config vitest.config.e2e.ts tests/cloudflare-workflows.e2e.test.ts"
+    "test:e2e": "vp test --config vitest.config.e2e.ts tests"
   },
   "dependencies": {
     "cloudflare-workflows-shared": "workspace:",

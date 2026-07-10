@@ -183,13 +183,13 @@ export type WorkflowRun<Payload, Result, Env = DefaultCloudflareEnv> = (
 ) => MaybeEffect<Result>;
 
 /** Sideffect workflow definition created by `Workflow.make(...)`. */
-export interface WorkflowDefinition<Payload, Env = DefaultCloudflareEnv> {
+export interface WorkflowDefinition<Payload, Env = DefaultCloudflareEnv, Input = Payload> {
   /** Runtime tag used by Sideffect to validate workflow definitions. */
   readonly _tag: "WorkflowDefinition";
   /** Cloudflare Workflow name. */
   readonly name: string;
   /** Schema used to decode incoming workflow event payloads. */
-  readonly payloadSchema: Schema.Schema<Payload>;
+  readonly payloadSchema: Schema.Codec<Payload, Input, never, unknown>;
   /**
    * Binds a workflow definition to its implementation.
    *
@@ -198,21 +198,32 @@ export interface WorkflowDefinition<Payload, Env = DefaultCloudflareEnv> {
    */
   toLayer<NextResult>(
     run: WorkflowRun<Payload, NextResult, Env>,
-  ): WorkflowLayer<Payload, NextResult, Env>;
+  ): WorkflowLayer<Payload, NextResult, Env, Input>;
 }
 
 /** Runnable Sideffect workflow layer. */
-export interface WorkflowLayer<Payload, Result = unknown, Env = DefaultCloudflareEnv> {
+export interface WorkflowLayer<
+  Payload,
+  Result = unknown,
+  Env = DefaultCloudflareEnv,
+  Input = Payload,
+> {
   /** Runtime tag used by Sideffect to validate workflow layers. */
   readonly _tag: "WorkflowLayer";
   /** Workflow definition and payload schema. */
-  readonly workflow: WorkflowDefinition<Payload, Env>;
+  readonly workflow: WorkflowDefinition<Payload, Env, Input>;
   /** Workflow implementation. */
   readonly run: WorkflowRun<Payload, Result, Env>;
 }
 
+/** Extracts the encoded input accepted by a Sideffect workflow binding. */
+export type WorkflowInput<Layer> =
+  Layer extends WorkflowLayer<infer _Payload, infer _Result, infer _Env, infer Input>
+    ? Input
+    : never;
+
 /** @internal Any Sideffect workflow layer. */
-export type WorkflowLayerAny = WorkflowLayer<any, any, any>;
+export type WorkflowLayerAny = WorkflowLayer<any, any, any, any>;
 
 /** @internal Named workflow layers used to generate Cloudflare entrypoints. */
 export type WorkflowLayerEntries = Record<string, WorkflowLayerAny>;
